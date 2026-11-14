@@ -25,38 +25,15 @@ local COST_W = 74 -- columna del precio a la derecha de cada fila (hasta "99g 99
 
 local function Ledger() return ES.Ledger end
 
--- Rutas de las que sale la lista de la compra: las empezadas; si no hay ninguna,
--- la de la profesión que estabas mirando (si ya está calculada)
+-- Rutas de las que sale la lista de la compra: solo las que empezaste. Antes, sin
+-- ninguna empezada, salía la de la última profesión que miraste: al abrir un vendedor
+-- proponía "200 Weak Flux" que no habías pedido, con la Lista de compra vacía
 local function Plans()
-  local plans, started = {}, 0
+  local plans = {}
   for _, prof in ipairs(ES.PROFESSIONS) do
     local plan = ES:RouteLock(prof.key) and ES:LockedPlan(prof.key)
-    if plan then started = started + 1 end
     -- (la quitaste de la Lista de compra con su ✕: tampoco sale aquí)
     if plan and not ES.Shopping.RouteListHidden(prof.key) then plans[#plans + 1] = { key = prof.key, plan = plan } end
-  end
-  -- La última profesión que miraste (si después abriste Ganar dinero, lastProf es
-  -- "money": entonces la última profesión de esta sesión)
-  local key = ES.db.lastProf
-  if not (key and ES.Data[key]) then key = ES.lastRouteProf end
-  if started == 0 and key then
-    local plan
-    for _, page in ipairs(ES.professionPages or {}) do
-      if page.profKey == key then plan = page.plan end
-    end
-    plan = plan or (ES.homePlanCache[key] and ES.homePlanCache[key].plan)
-    -- Sin abrir el addon en esta sesión aún no hay ruta calculada: se pide (repartida
-    -- entre fotogramas) y la ventana sale al acabar. Si no, no salía hasta abrirlo
-    if not plan and ES.Data[key] and ES.RequestPlan then
-      local rank, maxRank = ES:GetProfessionSkill(ES.Data[key].skillLine)
-      local from, to = rank or 1, ES:ProfessionTarget(key)
-      if from < to then
-        plan = ES:RequestPlan(key, from, to, rank and maxRank or nil, function()
-          if MerchantFrame and MerchantFrame:IsShown() then Vendor:Refresh() end
-        end, "vendor")
-      end
-    end
-    if plan and plan.pointNeed then plans[1] = { key = key, plan = plan } end
   end
   return plans
 end

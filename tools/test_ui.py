@@ -1710,21 +1710,30 @@ step("portada: tarjetas de profesiones", function()
   GetMerchantNumItems = function() return 1 end
   counts[OTHER] = nil
   V.queue, V.pumping = {}, nil
-  -- Ruta sin empezar: la ventana pide lo de la ruta entera, sin el colchón del tramo
-  -- (como la vista Materiales: Discord, 12 Fine Thread en la ruta y 14 aquí)
+  -- Ruta sin empezar: la ventana del vendedor no propone nada de ella, aunque sea la
+  -- última profesión que miraste (CurseForge: "200 Weak Flux" con la Lista de compra vacía)
   do
-    local savedLock, savedLast = ES.RouteLock, ES.db.lastProf
+    local savedLock, savedLast, savedLocked = ES.RouteLock, ES.db.lastProf, ES.LockedPlan
     ES.RouteLock = function() return nil end
     ES.db.lastProf = page.profKey
+    for _, e in ipairs(V:List()) do
+      assert(e.itemID ~= buyItem, "sin empezar la ruta, la ventana del vendedor no propone sus materiales")
+    end
+    -- Empezada (sin "por tramos"): lo de la ruta entera desde tu nivel, sin el colchón
+    -- del tramo (como la vista Materiales: Discord, 12 Fine Thread en la ruta y 14 aquí)
+    local savedPhase = ES.db.prof[page.profKey].byPhase
+    ES.db.prof[page.profKey].byPhase = false
+    ES.RouteLock = function(_, k) return k == page.profKey and { from = page.plan.from, to = page.plan.to } or nil end
+    ES.LockedPlan = function(_, k) return k == page.profKey and page.plan or nil end
     local rank = ES:GetProfessionSkill(ES.Data[page.profKey].skillLine)
     local want = ES.Planner.NeedFrom(page.plan, math.max(page.plan.from, rank or page.plan.from))[buyItem]
     local entry
     for _, e in ipairs(V:List()) do if e.itemID == buyItem then entry = e end end
     assert(entry and want and entry.need == math.ceil(want - 0.001),
-      "sin empezar, la ventana del vendedor pide " .. tostring(entry and entry.need) .. " y la ruta " .. tostring(want))
+      "empezada, la ventana del vendedor pide " .. tostring(entry and entry.need) .. " y la ruta " .. tostring(want))
+    ES.RouteLock = function() return nil end
+    ES.db.prof[page.profKey].byPhase = nil -- (por tramos, lo de por defecto)
     -- Y la regla única: sin empezar, aunque "por tramos" esté activado, la ruta entera
-    local savedPhase = ES.db.prof[page.profKey].byPhase
-    ES.db.prof[page.profKey].byPhase = nil
     local rn, ph = ES.Planner.RouteNeed(page.profKey, page.plan, rank)
     assert(ph == nil and rn[buyItem] and rn[buyItem].need == entry.need, "RouteNeed sin empezar: ruta entera")
     -- Empezada y por tramos: el tramo (lo mismo para Materiales, Lista de compra y vendedor)
@@ -1736,9 +1745,10 @@ step("portada: tarjetas de profesiones", function()
     -- Inventario (keep): siempre la ruta entera, aunque vaya por tramos
     local rnK, phK = ES.Planner.RouteNeed(page.profKey, page.plan, rank, { keep = true })
     assert(phK == nil and rnK[buyItem] and rnK[buyItem].need == entry.need, "RouteNeed keep: ruta entera")
-    ES.db.prof[page.profKey].byPhase = savedPhase
+    ES.db.prof[page.profKey].byPhase = false
     -- Lo de vendedor de las demás listas de la compra (calculadora, Ganar dinero) también
     -- sale aquí: junto a la AH ya no sale
+    ES.RouteLock = function(_, k) return k == page.profKey and { from = page.plan.from, to = page.plan.to } or nil end
     local savedChar = ES.charData
     ES.charData = { shopping = { { kind = "calc", title = "Calc", key = "c",
       items = { { itemID = buyItem, need = 7, unit = 100, source = "vendor" } } } } }
@@ -1747,8 +1757,9 @@ step("portada: tarjetas de profesiones", function()
     assert(withCalc and withCalc.need == entry.need + 7, "la ventana del vendedor suma lo de vendedor de la lista de compra: "
       .. tostring(withCalc and withCalc.need) .. " vs " .. entry.need .. " + 7")
     ES.charData = savedChar
-    ES.RouteLock, ES.db.lastProf = savedLock, savedLast
-    log[#log+1] = "     vendedor: sin empezar la ruta, pide lo mismo que la ruta (" .. entry.need .. ")"
+    ES.db.prof[page.profKey].byPhase = savedPhase
+    ES.RouteLock, ES.db.lastProf, ES.LockedPlan = savedLock, savedLast, savedLocked
+    log[#log+1] = "     vendedor: sin empezar la ruta no propone nada; empezada, lo de la ruta (" .. entry.need .. ")"
   end
   -- Cliente clásico: BuyMerchantItem(i, n) cuenta n en lotes. Pedir 6 de uno que va
   -- de 3 en 3 compraba 18; ahora, de lote en lote (sin cantidad): 6
