@@ -478,6 +478,7 @@ function ES:RefreshAllViews()
   if self.RefreshPatternPages then self:RefreshPatternPages() end -- Colección de recetas
   if self.RenderCalculator then self:RenderCalculator() end    -- Calculadora (sus precios salen del escaneo)
   if self.RenderShopping then self:RenderShopping() end        -- Lista de compra
+  if self.AuctionSell and self.AuctionSell.Refresh then self.AuctionSell:Refresh() end -- ventana de vender junto a la AH
 end
 
 -- Menú de addons del minimapa (compartment)

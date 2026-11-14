@@ -3025,6 +3025,32 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     for _, row in ipairs(sp.rows) do assert(not (row._shown ~= false and row.entry and row.entry.itemID == JUNK), "lo del vendedor no va a la ventana de la AH") end
     assert(tostring(upRow.name._text):find("|cff0070dd", 1, true), "el nombre lleva el color de su calidad: " .. tostring(upRow.name._text))
     assert(tostring(sp.hint._text):find("derecho"), "a la vista, qué hace el clic derecho")
+    -- Al anunciar, de cuándo son los precios: escaneando, en naranja con el % (y el clic
+    -- no anuncia, Ledger:PostOnAH); de hace más de 1 h, en naranja; recientes, el subtítulo
+    do
+      local scanRow = ES.db.scans and ES.db.scans[ES:RealmKey()]
+      assert(scanRow, "(la prueba necesita un escaneo)")
+      local savedTime, savedState, savedProg = scanRow.time, ES.Scanner.state, ES.Scanner.progress
+      scanRow.time = time() - 60
+      ES.AuctionSell:Refresh()
+      assert(tostring(sp.sub._text):find("Para vender"), "precios recientes: el subtítulo de siempre: " .. tostring(sp.sub._text))
+      scanRow.time = time() - 3 * 3600 - 60
+      ES.AuctionSell:Refresh()
+      assert(tostring(sp.sub._text):find("hace 3 h", 1, true) and tostring(sp.sub._text):find("ff9933"), "precios de hace 3 h, en naranja: " .. tostring(sp.sub._text))
+      ES.Scanner.state, ES.Scanner.progress = "scanning", 0.45
+      ES:UpdatePostStatus()
+      assert(tostring(sp.sub._text):find("45%", 1, true), "escaneando: el aviso con el %: " .. tostring(sp.sub._text))
+      ES.Scanner.progress = 0.8
+      ES:UpdatePostStatus()
+      assert(tostring(sp.sub._text):find("80%", 1, true), "el % avanza sin recalcular: " .. tostring(sp.sub._text))
+      ES.Scanner.state, ES.Scanner.progress = savedState, savedProg
+      scanRow.time = time() - 60
+      ES:UpdatePostStatus() -- acaba: la ventana se recalcula con los precios nuevos
+      assert(tostring(sp.sub._text):find("Para vender"), "al acabar el escaneo, el subtítulo vuelve: " .. tostring(sp.sub._text))
+      scanRow.time = savedTime
+      ES.AuctionSell:Refresh()
+      log[#log+1] = "     ventana de la AH: avisa escaneando (con el %) y con precios de más de 1 h"
+    end
     posted = nil
     -- (el tooltip es el del Inventario; aquí Market.Signals está simulado sin sus cifras)
     -- Clic: todas las de la fila (como en Inventario); Mayús+clic: solo una
@@ -3115,6 +3141,17 @@ step("anunciar con la AH ocupada: un aviso, no uno por clic", function()
   C_AuctionHouse = { IsThrottledMessageSystemReady = function() return ready end,
     PostItem = function() posts = posts + 1 end }
   ItemLocation = { CreateFromBagAndSlot = function() return {} end }
+  -- Escaneando: no se anuncia (el precio de la fila es el del escaneo anterior)
+  do
+    local savedState, savedProg = ES.Scanner.state, ES.Scanner.progress
+    ES.Scanner.state, ES.Scanner.progress = "scanning", 0.45
+    ready = true
+    local n = ES.Ledger:PostOnAH(2318, 1, 500)
+    assert(n == 0 and posts == 0, "escaneando no se anuncia")
+    assert(#printed == 1 and printed[1]:find("45%", 1, true), "escaneando: aviso con el %: " .. tostring(printed[1]))
+    ES.Scanner.state, ES.Scanner.progress = savedState, savedProg
+    ready, printed = false, {}
+  end
   ES.Ledger.ahBusy = nil
   for _ = 1, 5 do ES.Ledger:PostOnAH(2318, 1, 500) clock = clock + 0.3 end
   assert(#printed == 1 and posts == 0, "cinco clics con la AH ocupada: un solo aviso (" .. #printed .. ")")

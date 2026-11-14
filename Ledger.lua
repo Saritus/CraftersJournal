@@ -607,6 +607,33 @@ function Ledger.DurationIndex(hours, AH, location, itemID, qty, commodity)
   return #set, set[#set]
 end
 
+-- Precios de la AH más viejos que esto: al anunciar se avisa en naranja (sin bloquear;
+-- otros vendedores pueden haber bajado el precio)
+Ledger.OLD_PRICES = 3600
+
+-- Estado de los precios a los que se anuncia, para la ventana de vender y el
+-- Inventario: "scanning" (no se anuncia hasta que acabe; con el % hecho),
+-- "old" (con las horas) o nil (recientes o sin escaneo, que ya avisa cada ventana)
+function Ledger:PostPriceState()
+  if ES.Scanner and ES.Scanner:IsBusy() then
+    return "scanning", math.floor((ES.Scanner.progress or 0) * 100)
+  end
+  local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
+  if scan and scan.time and time() - scan.time > Ledger.OLD_PRICES then
+    return "old", math.floor((time() - scan.time) / 3600)
+  end
+end
+
+-- La línea en naranja de ese estado, o nil
+function Ledger:PostPriceWarning()
+  local state, n = self:PostPriceState()
+  if state == "scanning" then
+    return "|cffff9933" .. string.format(L["Escaneando la AH (%d%%): espera para anunciar al precio de ahora."], n) .. "|r"
+  elseif state == "old" then
+    return "|cffff9933" .. string.format(L["Precios de hace %d h: pueden haber cambiado. Escanea antes de anunciar."], n) .. "|r"
+  end
+end
+
 -- Anuncia `n` unidades en la AH abierta a `unit` cobre cada una, en una subasta de
 -- `hours` horas (24 por defecto; ver DurationIndex). Solo con la AH de Forever
 -- (C_AuctionHouse); con la clásica, se anuncia a mano. Los materiales
@@ -616,6 +643,14 @@ function Ledger:PostOnAH(itemID, n, unit, hours)
   local AH = C_AuctionHouse
   if not (ES:IsAuctionHouseOpen() and AH and AH.PostItem and ItemLocation) then
     ES:Print(L["Anúncialo desde la ventana de la Casa de Subastas."])
+    return 0
+  end
+  -- Escaneando (tuyo o el de otro addon al abrir la AH): el precio de la fila es el del
+  -- escaneo anterior y en unos segundos llega el de ahora. Se espera (antes se
+  -- anunciaba al precio viejo)
+  if ES.Scanner and ES.Scanner:IsBusy() then
+    ES:Print(string.format(L["Escaneando la AH (%d%%): espera a que acabe para anunciar al precio de ahora."],
+      math.floor((ES.Scanner.progress or 0) * 100)))
     return 0
   end
   if AH.IsThrottledMessageSystemReady and not AH.IsThrottledMessageSystemReady() then

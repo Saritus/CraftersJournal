@@ -307,6 +307,13 @@ local function Tooltip(e, noActions)
       GameTooltip:AddDoubleLine(string.format(L["%d en la AH a %s"], e.ahN, ES.Money(e.listPrice)),
         "+" .. ES.Money(e.ahN * e.ahUnit), 1, 0.82, 0, 1, 1, 1)
       GameTooltip:AddLine(L["(lo que te queda tras la comisión de la AH; el depósito se devuelve al venderse)"], 0.6, 0.6, 0.6, true)
+      -- De cuándo es ese precio (viejo: en naranja; puede haber bajado)
+      local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
+      if scan and scan.time and ES.TimeAgo then
+        local old = time() - scan.time > ES.Ledger.OLD_PRICES
+        GameTooltip:AddLine(string.format(L["Precio del escaneo de la AH de %s."], ES.TimeAgo(scan.time)),
+          old and 1 or 0.6, old and 0.6 or 0.6, old and 0.2 or 0.6, true)
+      end
       if e.hours == AH_HOURS_RISKY and e.depositRisk then
         GameTooltip:AddLine(string.format(L["Subasta de %d h: no se sabe si se vende y, si caduca, pierdes solo %s de depósito por subasta."],
           e.hours, ES.Money(e.depositRisk)), 0.6, 0.6, 0.6, true)
@@ -495,7 +502,12 @@ function ES:RenderInventory()
   page.stats.rising:SetText(tostring(#rising))
 
   local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
-  if not scan then
+  local postState = ES.Ledger:PostPriceState()
+  if postState == "scanning" or (scan and postState == "old" and ES:IsAuctionHouseOpen()) then
+    -- Al anunciar: escaneando (el clic no anuncia hasta que acabe) o precios de hace más
+    -- de 1 h con la AH abierta
+    page.status:SetText(ES.Ledger:PostPriceWarning())
+  elseif not scan then
     page.status:SetText(ORANGE .. L["Sin escaneo de la AH: solo se cuenta el vendedor. Escanea para ver qué vale más en la AH.|r"])
   else
     local mins = math.floor((time() - scan.time) / 60)
@@ -507,7 +519,8 @@ function ES:RenderInventory()
   local hint = merchant and L["Clic en una fila: venderla al vendedor."]
     or ES:IsAuctionHouseOpen() and L["Clic en una fila: anunciarla en la AH."]
     or L["Con vendedor o AH abiertos, clic en una fila para venderla."] -- (corto: comparte línea con los precios)
-  page.status:SetText(page.status:GetText() .. "  |cff80ccff" .. hint .. "|r")
+  page.hintText = "  |cff80ccff" .. hint .. "|r" -- (también al avanzar el escaneo, ES:UpdatePostStatus)
+  page.status:SetText(page.status:GetText() .. page.hintText)
   page.action:SetShown(merchant and #vendor > 0)
   page.action:SetText(L["Vender al vendedor"])
 

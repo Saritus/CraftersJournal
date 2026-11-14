@@ -60,6 +60,11 @@ local function RowEnter(self)
     ES.Inventory.Tooltip(self.entry, true)(self) -- (sin sus líneas de clic: aquí van las de esta ventana)
   end
   GameTooltip:AddLine(" ")
+  if ES.Ledger:PostPriceState() == "scanning" then
+    GameTooltip:AddLine(L["Escaneando la AH: espera a que acabe para anunciarlo."], 1, 0.6, 0.2, true)
+    GameTooltip:Show()
+    return
+  end
   GameTooltip:AddLine(string.format(L["Clic: anunciar %d."], self.entry.ahN), 0.5, 0.8, 1)
   if self.entry.ahN > 1 then
     GameTooltip:AddLine(L["Mayús+clic: anunciar solo 1."], 0.5, 0.8, 1)
@@ -164,7 +169,9 @@ function Sell:Refresh()
   panel = panel or CreatePanel(ah)
   Place(ah)
   if panel.SetFrameStrata and ah.GetFrameStrata then panel:SetFrameStrata(ah:GetFrameStrata()) end
-  panel.sub:SetText(L["Para vender en la AH, de tus bolsas:"])
+  -- Escaneando o precios viejos: en naranja en lugar del subtítulo (al escanear, el
+  -- clic no anuncia; ver Ledger:PostOnAH)
+  panel.sub:SetText(ES.Ledger:PostPriceWarning() or L["Para vender en la AH, de tus bolsas:"])
   local function H(fs) return math.min(tonumber(fs:GetStringHeight()) or 12, 40) end
   local y = -(10 + H(panel.title) + 3 + H(panel.sub) + 8)
   local shown = math.min(#list, MAX_ROWS)

@@ -43,6 +43,7 @@ local function TimeAgo(t)
   if d < 86400 then return string.format(L["hace %d h"], math.floor(d / 3600)) end
   return string.format(L["hace %d días"], math.floor(d / 86400))
 end
+ES.TimeAgo = TimeAgo -- (también el estado de los precios al anunciar, Ledger.lua)
 
 ---------------------------------------------------------------------------
 -- Panel principal
@@ -564,6 +565,7 @@ function ES:RefreshScanButtons()
     ahButton:SetEnabled(enabled)
     ahButton:SetText(progress and ("Crafter's Journal: " .. progress) or L["Crafter's Journal: Escanear"])
   end
+  self:UpdatePostStatus()
   -- Mientras dure el límite, la cuenta atrás avanza cada segundo
   if wait > 0 and not self.countdownTicking then
     self.countdownTicking = true
@@ -582,6 +584,27 @@ end
 
 function ES:OnScanProgress()
   self:RefreshScanButtons()
+end
+
+-- Al empezar o acabar un escaneo (también si falla o se cancela), las ventanas desde
+-- las que se anuncia cambian: mientras escanea no se anuncia y al acabar llegan los
+-- precios nuevos. Entre medias, solo el % del aviso (sin recalcular las filas)
+function ES:UpdatePostStatus()
+  local busy = self.Scanner:IsBusy()
+  if busy ~= self.postBusy then
+    self.postBusy = busy
+    if self.AuctionSell and self.AuctionSell.Refresh then self.AuctionSell:Refresh() end
+    if self.RenderInventory then self:RenderInventory() end
+    return
+  end
+  if not busy then return end
+  local warn = self.Ledger:PostPriceWarning()
+  local sell = CraftersJournalAuctionSellPanel
+  if sell and sell:IsShown() and sell.sub then sell.sub:SetText(warn) end
+  local page = self.inventoryPage
+  if page and page:IsVisible() and page.status and page.hintText then
+    page.status:SetText(warn .. page.hintText)
+  end
 end
 
 -- "Último escaneo: hace 3 min" junto al botón (de la AH activa)
