@@ -169,7 +169,8 @@ local function CreateMainFrame()
   f.navTitle:SetJustifyH("LEFT")
 
   -- Working Overtime activo (talento de legado, ES:UpdateSkillUpBonus): su icono y una
-  -- etiqueta junto al título, en las páginas de rutas. Así se ve que las rutas lo cuentan
+  -- etiqueta junto al título, en las páginas de rutas. Su tooltip dice si las rutas lo
+  -- cuentan (ES.COUNT_OVERTIME; por ahora no) y que comprar por tramos lo compensa
   local ot = CreateFrame("Frame", nil, f)
   ot:SetSize(200, 22)
   ot:EnableMouse(true)
@@ -183,8 +184,16 @@ local function CreateMainFrame()
     local rank = ES.overtimeRank or 0
     GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
     GameTooltip:AddLine("Working Overtime", 1, 0.82, 0)
-    GameTooltip:AddLine(string.format(L["Talento de legado, rango %d/5: las rutas suman +%d%% a la probabilidad de subir punto en las recetas amarillas y verdes, y piden menos fabricaciones."],
-      rank, math.floor(rank * ES.OVERTIME_PER_RANK * 100 + 0.5)), 1, 1, 1, true)
+    local bonus = rank * ES.OVERTIME_PER_RANK
+    GameTooltip:AddLine(string.format(L["Talento de legado, rango %d/5: +%d%% de probabilidad de subir punto en las recetas amarillas y verdes."],
+      rank, math.floor(bonus * 100 + 0.5)), 1, 1, 1, true)
+    if ES.COUNT_OVERTIME then
+      GameTooltip:AddLine(L["Las rutas lo cuentan: piden menos fabricaciones en los pasos amarillos y verdes."], 0.8, 0.8, 0.8, true)
+    else
+      GameTooltip:AddLine(" ")
+      GameTooltip:AddLine(L["Las rutas aún no lo cuentan: no se sabe con certeza cómo lo aplica el juego. Con él necesitarás algo menos de fabricaciones de las que dice la ruta en los pasos amarillos y verdes."], 1, 0.82, 0, true)
+      GameTooltip:AddLine(L["Por eso compensa comprar por tramos (lo que hace la Lista de compra por defecto): cada tramo compra solo lo suyo y el siguiente cuenta lo que te sobró, así que como mucho te sobra algo de un tramo."], 0.5, 0.8, 1, true)
+    end
     GameTooltip:Show()
   end)
   ot:SetScript("OnLeave", function() GameTooltip:Hide() end)

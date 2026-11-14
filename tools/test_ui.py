@@ -2761,7 +2761,7 @@ step("lista de la compra: cuenta lo que hicieron pasos anteriores", function()
   end
   assert(need[item] <= made + 1, string.format("la lista pide %d hechos antes y solo se hicieron %d", need[item], made))
 end)
-step("Working Overtime: se lee del árbol de legado y sube la probabilidad", function()
+step("Working Overtime: se lee del árbol de legado (las rutas aún no lo cuentan)", function()
   -- Árbol de legado simulado como lo da C_Traits (sistema 45): un nodo con el talento
   local savedT, savedName, savedGSI, savedPrint = C_Traits, C_Spell, GetSpellInfo, ES.Print
   local rank = 5
@@ -2778,25 +2778,27 @@ step("Working Overtime: se lee del árbol de legado y sube la probabilidad", fun
   ES.db.overtimeSpell = nil
   local r, spell = ES:ReadWorkingOvertime()
   assert(r == 5 and spell == 999001 and ES.db.overtimeSpell == 999001, "rango y hechizo de Working Overtime: " .. tostring(r))
-  -- Aplicado: +20 puntos en amarillo y verde; naranja 100% y gris 0, como siempre
+  -- Por ahora las rutas NO lo cuentan (ES.COUNT_OVERTIME = false): se lee el rango para
+  -- el indicador, pero la probabilidad no cambia
+  local t = { 1, 100, 125, 150 }
   ES.Planner.SKILL_BONUS = 0
   ES:UpdateSkillUpBonus()
-  local t = { 1, 100, 125, 150 }
-  assert(math.abs(ES.Planner.SKILL_BONUS - 0.20) < 1e-9, "bonus del rango 5: " .. ES.Planner.SKILL_BONUS)
-  assert(math.abs(ES.Planner.Chance(t, 125) - 0.70) < 1e-9, "verde al 50% -> 70%: " .. ES.Planner.Chance(t, 125))
-  assert(ES.Planner.Chance(t, 105) == 1, "no pasa del 100%")
+  assert(ES.overtimeRank == 5 and ES.Planner.SKILL_BONUS == 0, "sin contarlo, el rango no cambia las rutas: " .. ES.Planner.SKILL_BONUS)
+  assert(math.abs(ES.Planner.Chance(t, 125) - 0.50) < 1e-9, "sin contarlo, verde al 50% se queda en 50%")
+  -- Si se activa, multiplica (×1,20), no suma: 50% -> 60%; al final del verde, 2% -> 2,4%
+  -- (sumado daba 22%: la ruta pedía menos de la mitad de las fabricaciones)
+  ES.COUNT_OVERTIME = true
+  ES:UpdateSkillUpBonus()
+  assert(math.abs(ES.Planner.SKILL_BONUS - 0.20) < 1e-9, "contándolo, bonus del rango 5: " .. ES.Planner.SKILL_BONUS)
+  assert(math.abs(ES.Planner.Chance(t, 125) - 0.60) < 1e-9, "verde al 50% -> 60%: " .. ES.Planner.Chance(t, 125))
+  assert(math.abs(ES.Planner.Chance(t, 149) - 0.024) < 1e-9, "al final del verde, 2% -> 2,4%: " .. ES.Planner.Chance(t, 149))
+  assert(ES.Planner.Chance(t, 101) == 1, "no pasa del 100%")
   assert(ES.Planner.Chance(t, 50) == 1 and ES.Planner.Chance(t, 150) == 0, "naranja y gris sin cambios")
-  -- La ruta se recalcula con el bonus (otra clave de caché) y pide menos fabricaciones
-  local data = ES.Data.Leatherworking
-  local with = ES.Planner:Plan(data, { from = 1, to = 150, hours = 24, ignoreSupply = true })
   local keyWith = ES:PlanKey("Leatherworking", 1, 150, nil)
   rank = 0
   ES:UpdateSkillUpBonus()
   assert(ES.Planner.SKILL_BONUS == 0 and ES:PlanKey("Leatherworking", 1, 150, nil) ~= keyWith, "sin el talento: otra clave de ruta")
-  local without = ES.Planner:Plan(data, { from = 1, to = 150, hours = 24, ignoreSupply = true })
-  assert(ES.Planner.TotalCrafts(with) < ES.Planner.TotalCrafts(without),
-    string.format("con Working Overtime la ruta pide menos fabricaciones: %d vs %d", ES.Planner.TotalCrafts(with), ES.Planner.TotalCrafts(without)))
-  log[#log+1] = string.format("     peletería 1-150: %d fabricaciones con +20%%, %d sin el talento", ES.Planner.TotalCrafts(with), ES.Planner.TotalCrafts(without))
+  ES.COUNT_OVERTIME = false
   -- Indicador en la cabecera (sin comando: se lee del juego): con rango, icono y
   -- "Working Overtime +12%" en las páginas de rutas; sin rango, nada
   local mf = ES:GetMainFrame()

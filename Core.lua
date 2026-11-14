@@ -249,10 +249,14 @@ end
 -- talento Diplomat: el nodo cuyo hechizo es Working Overtime, y su rango comprado.
 -- Se reconoce por su hechizo (1225451, Warcraft Wiki / Wowhead) o, si cambiara, por
 -- el nombre; el ID encontrado se guarda (ES.db.overtimeSpell).
--- Se SUMA a la probabilidad (+20 puntos), como "aumenta tu probabilidad" en WoW.
--- Ninguna fuente dice si suma o multiplica (Wowhead: "Aura #657", valores
--- 4/8/12/16/20); si se midiera que multiplica, se cambia en Planner.Chance
+-- LAS RUTAS NO LO CUENTAN POR AHORA: ninguna fuente dice si suma o multiplica
+-- (Wowhead: "Aura #657", valores 4/8/12/16/20), y en verde la diferencia es enorme.
+-- Sumado, la ruta prometía menos de la mitad de las fabricaciones (CurseForge: "casi
+-- el triple"). Sin contarlo, quien lo tiene necesita algunas menos de las que dice
+-- la ruta: con la compra por tramos solo le sobra parte de un tramo. Se lee el rango
+-- para el indicador; cuando se sepa cómo funciona, COUNT_OVERTIME = true y Planner.Chance
 ---------------------------------------------------------------------------
+ES.COUNT_OVERTIME = false
 local LEGACY_SYSTEM_ID = 45
 local OVERTIME_SPELL = 1225451
 local OVERTIME_NAME = "Working Overtime"
@@ -314,11 +318,12 @@ function ES:ReadWorkingOvertime()
   return 0, nil -- (el árbol se lee, pero no tiene el talento)
 end
 
--- Lee el rango y, si cambió, lo aplica a las rutas (Planner.SKILL_BONUS) y las rehace
+-- Lee el rango (el indicador) y, si las rutas lo cuentan (ES.COUNT_OVERTIME) y cambió,
+-- lo aplica a las rutas (Planner.SKILL_BONUS) y las rehace
 function ES:UpdateSkillUpBonus()
   local rank = self:ReadWorkingOvertime()
   if rank == nil then return end -- (sin datos aún: se queda lo que había)
-  local bonus = rank * ES.OVERTIME_PER_RANK
+  local bonus = ES.COUNT_OVERTIME and rank * ES.OVERTIME_PER_RANK or 0
   self.overtimeRank = rank
   if ES.Planner and ES.Planner.SKILL_BONUS ~= bonus then
     ES.Planner.SKILL_BONUS = bonus

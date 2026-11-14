@@ -361,15 +361,17 @@ end
 local MAX_CRAFT_DEPTH = 3
 local EPS = 1e-6
 
--- Probabilidad clásica de subir punto, más el bonus de Working Overtime (talento de
--- legado de Forever, ES:UpdateSkillUpBonus): se suma en amarillo y verde (+4% por
--- rango, hasta +20%). Naranja ya es el 100% y gris sigue sin dar puntos
+-- Probabilidad clásica de subir punto. Naranja es el 100% y gris no da puntos.
+-- SKILL_BONUS (Working Overtime) está a 0: las rutas no lo cuentan hasta que se sepa
+-- cómo lo aplica el juego (ver ES.COUNT_OVERTIME en Core.lua). Si se activa, aquí
+-- multiplica (×1,16 con 4 rangos): sumado, al final del verde un 3% pasaba a 19% y la
+-- ruta pedía menos de la mitad de las fabricaciones (CurseForge: "casi el triple")
 Planner.SKILL_BONUS = 0
 function Planner.Chance(t, skill)
   local yellow, grey = t[2], t[4]
   if skill < yellow then return 1 end
   if skill >= grey then return 0 end
-  return math.min(1, (grey - skill) / (grey - yellow) + (Planner.SKILL_BONUS or 0))
+  return math.min(1, (grey - skill) / (grey - yellow) * (1 + (Planner.SKILL_BONUS or 0)))
 end
 
 -- Donde la ruta se para (no hay materiales para un punto entero: Rough Grinding
