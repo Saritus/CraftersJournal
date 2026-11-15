@@ -632,8 +632,7 @@ function ES:UpdatePostStatus()
   end
   if not busy then return end
   local warn = self.Ledger:PostPriceWarning()
-  local sell = CraftersJournalAuctionSellPanel
-  if sell and sell:IsShown() and sell.sub then sell.sub:SetText(warn) end
+  if self.AuctionSell and self.AuctionSell.UpdateWait then self.AuctionSell:UpdateWait() end -- (el % de la capa de espera)
   local page = self.inventoryPage
   if page and page:IsVisible() and page.status and page.hintText then
     page.status:SetText(warn .. page.hintText)

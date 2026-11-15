@@ -3,8 +3,9 @@ local L = ES.L
 
 ---------------------------------------------------------------------------
 -- Novedades: al entrar con una versión nueva del addon sale una ventana con lo nuevo
--- de las versiones que no has visto. Una vez por versión: se guarda la última vista
--- en ES.db.whatsNewSeen (de la cuenta, no del personaje).
+-- de las versiones que no has visto, todo en una sola lista (sin cabeceras de versión;
+-- como mucho ES.WHATS_NEW_MAX_ITEMS, lo más nuevo primero). Una vez por versión: se
+-- guarda la última vista en ES.db.whatsNewSeen (de la cuenta, no del personaje).
 --   * Instalación nueva (sin nada guardado): no sale; se apunta la versión actual.
 --   * Versión sin notas en ES.WHATS_NEW: no sale; se apunta igual.
 -- Para escribir las notas: /cj whatsnew [versión] la abre cuando quieras, sin tocar lo
@@ -15,8 +16,38 @@ local L = ES.L
 -- Locales/enUS.lua (como el resto del addon).
 ---------------------------------------------------------------------------
 
--- Lo nuevo de cada versión, de la más nueva a la más antigua. `items`: { icon, title, text }
+-- Lo nuevo de cada versión, de la más nueva a la más antigua. `items`: { icon, title,
+-- text, top }. `top = true`: destacada, la primera de la lista aunque sea de una
+-- versión anterior (si te saltaste versiones, todo sale junto: ver ShowWhatsNew)
 ES.WHATS_NEW = {
+  {
+    version = "0.57.0",
+    items = {
+      { icon = "Interface\\Icons\\INV_Misc_Coin_03", title = "Precios del vendedor, siempre los del juego",
+        text = "El addon ya no deduce lo que paga el vendedor del dinero que te entra al vender: con dos ventas cobradas juntas podía apuntar el doble, y Ganar dinero prometía de más. Ahora usa siempre el precio del juego." },
+      { icon = "Interface\\Icons\\INV_Misc_Book_11", title = "Aprender una receta, solo si compensa",
+        text = "La ruta ya no te manda al instructor a aprender una receta para unas pocas fabricaciones que ahorran unas monedas: esos puntos los hace con la receta de al lado, salvo que ahorre más de 5s." },
+      { icon = "Interface\\Icons\\Spell_Holy_BorrowedTime", title = "Se ve cuándo esperar en la AH",
+        text = "Mientras se escanea la AH, la ventana de vender queda tapada con un reloj de arena y el progreso: así no anuncias a precios viejos sin querer." },
+    },
+  },
+  {
+    version = "0.56.0",
+    items = {
+      { icon = "Interface\\Icons\\INV_Misc_Coin_17", top = true, title = "Nueva pestaña: Merchant's Favor",
+        text = "Con qué llenar tus Waylaid Crates al menor coste y qué cajas de la AH dan el Favor más barato por punto. Clic en una fila para añadirlo a la lista de compra." },
+      { icon = "Interface\\Icons\\Spell_Nature_TimeStop", title = "Más fluido",
+        text = "Sin tirones al acabar un escaneo ni al entrar, fabricar en serie va fluido y el addon apenas trabaja mientras juegas por el mundo." },
+      { icon = "Interface\\Icons\\INV_Misc_PocketWatch_01", title = "Cuánto se tarda en fabricar",
+        text = "Cada paso de la ruta dice cuánto se tarda en fabricarlo (en naranja si es lento) y el total, el de toda la ruta. \"Menos fabricaciones\" ahora también evita las recetas lentas." },
+      { icon = "Interface\\Icons\\INV_Misc_Coin_02", title = "Ganar dinero, más fiable",
+        text = "Solo fabrica lo intermedio con recetas que sabes y dice qué fabricar antes. Enseña cuánto ya llevas en las bolsas, y las filas del lote no cambian de sitio al pulsar - o +." },
+      { icon = "Interface\\Icons\\INV_Misc_Gear_01", title = "Quitar una ventana, en un clic",
+        text = "El engranaje de las ventanas junto al vendedor, la AH y la profesión abre un menú con \"No mostrar esta ventana\", sin buscarla en las opciones." },
+      { icon = "Interface\\Icons\\INV_Misc_Spyglass_03", title = "Buscar en la AH con Mayús+clic",
+        text = "Mayús+clic en un objeto del addon lo busca en la AH (o lo enlaza en el chat). Y la lista de compra junto a la AH tiene una X en cada lista para quitarla." },
+    },
+  },
   {
     version = "0.55.0",
     items = {
@@ -58,6 +89,10 @@ ES.CompareVersions = CompareVersions
 -- Notas de las versiones posteriores a `seen` hasta `current` (como mucho MAX_SHOWN, de
 -- la más nueva a la más antigua). Sin `seen`: solo la de `current`
 local MAX_SHOWN = 3
+-- En la ventana, todas juntas en una lista (sin cabeceras de versión) y como mucho
+-- estas: lo de la versión más nueva primero. Por eso, en cada versión, lo más
+-- importante arriba
+ES.WHATS_NEW_MAX_ITEMS = 6
 function ES:WhatsNewSince(seen, current)
   local out = {}
   for _, v in ipairs(ES.WHATS_NEW) do
@@ -187,26 +222,21 @@ function ES:ShowWhatsNew(notes, dev)
   f.ok:SetText(L["¡Entendido!"])
   f.devTag:SetText(dev and L["Vista de desarrollo: no cuenta como vista."] or "")
   local y, n = 0, 0
-  for vi, v in ipairs(notes) do
-    -- Cabecera de la versión (solo si hay más de una)
-    if #notes > 1 then
-      n = n + 1
-      local l = Line(f, n)
-      l:ClearAllPoints()
-      l:SetPoint("TOPLEFT", 0, -y)
-      l:SetWidth(width)
-      l.bg:Hide()
-      l.icon:Hide()
-      l.text:SetText("")
-      l.title:ClearAllPoints()
-      l.title:SetPoint("BOTTOMLEFT", 2, 4)
-      l.title:SetText(string.format(L["Versión %s"], v.version))
-      l.title:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-      l:SetHeight(vi == 1 and 20 or 28)
-      l:Show()
-      y = y + (vi == 1 and 20 or 28)
+  -- Una sola lista, sin cabeceras de versión: si te saltaste versiones, lo de todas
+  -- junto, de la más nueva a la más antigua y como mucho MAX_ITEMS (antes una
+  -- sección por versión, una tras otra: salía muy larga)
+  -- Las destacadas (top = true: una pestaña nueva...) van las primeras, sea de la
+  -- versión que sea; luego el resto, de la versión más nueva a la más antigua
+  local items = {}
+  for _, wantTop in ipairs({ true, false }) do
+    for _, v in ipairs(notes) do
+      for _, it in ipairs(v.items) do
+        if (it.top == true) == wantTop and #items < ES.WHATS_NEW_MAX_ITEMS then items[#items + 1] = it end
+      end
     end
-    for _, it in ipairs(v.items) do
+  end
+  do
+    for _, it in ipairs(items) do
       n = n + 1
       local l = Line(f, n)
       l:ClearAllPoints()

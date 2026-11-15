@@ -171,16 +171,14 @@ end
 ---------------------------------------------------------------------------
 local GetItemInfoCompat = (C_Item and C_Item.GetItemInfo) or GetItemInfo
 
--- Lo que paga el vendedor: lo visto al vender en el juego (Ledger.lua); si no, lo que
--- dice el juego ahora (siempre al día: Forever cambia precios, Bronze Dory pasó de
--- 32s 53c a 4s 88c); si el juego aún no ha cargado el objeto, se le pide y mientras
--- vale el de los datos (puede ser de una versión anterior de Forever)
+-- Lo que paga el vendedor: lo que dice el juego ahora (siempre al día: Forever cambia
+-- precios, Bronze Dory pasó de 32s 53c a 4s 88c); si el juego aún no ha cargado el
+-- objeto, se le pide y mientras vale el de los datos. Ya no se "aprende" de tus
+-- ventas (Ledger.lua): adivinaba mal con dos ventas cobradas juntas
 -- Objetos ya pedidos al juego en esta sesión: el cálculo de una ruta pregunta miles
 -- de veces por los mismos (14.000 en Peletería de 88 a 300); basta con pedirlo una vez
 local requested = {}
 function ES:VendorSellPrice(itemID)
-  local seen = ES.db and ES.db.sellSeen and ES.db.sellSeen[itemID]
-  if seen and seen.ok then return seen.price end -- (sin ok: un cobro suelto, sin confirmar)
   local live = select(11, GetItemInfoCompat(itemID))
   if live then return live end
   if not requested[itemID] and C_Item and C_Item.RequestLoadItemDataByID then
@@ -190,11 +188,9 @@ function ES:VendorSellPrice(itemID)
   return ES.Data.SellPrices[itemID]
 end
 
--- ¿El precio de venta es el de ahora (visto al vender o dado por el juego)? Si no, es
--- el de los datos y la ruta se recalcula cuando el juego cargue el objeto
+-- ¿El precio de venta es el de ahora (dado por el juego)? Si no, es el de los datos
+-- y la ruta se recalcula cuando el juego cargue el objeto
 function ES:SellPriceIsLive(itemID)
-  local seen = ES.db and ES.db.sellSeen and ES.db.sellSeen[itemID]
-  if seen and seen.ok then return true end
   return select(11, GetItemInfoCompat(itemID)) ~= nil
 end
 

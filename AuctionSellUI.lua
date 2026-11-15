@@ -158,6 +158,71 @@ local function RowEnter(self)
   GameTooltip:Show()
 end
 
+-- Escaneando: una capa oscura sobre las filas con un reloj de arena que se da la
+-- vuelta y el %, que se ve de un vistazo que hay que esperar (el subtítulo en naranja
+-- pasaba desapercibido). Tapa las filas: ni clic ni tooltip hasta que acabe
+-- El reloj, quieto y redondo (máscara circular: sin el borde cuadrado del icono, que
+-- girando quedaba mal); alrededor, el anillo de carga del juego dando vueltas
+local HOURGLASS = "Interface\\Icons\\Spell_Holy_BorrowedTime"
+local RING = "Interface\\COMMON\\StreamCircle"
+local ROUND_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+local RING_SPEED = 2 * math.pi / 1.4 -- una vuelta cada 1,4 s
+local function CreateWait(f)
+  local w = CreateFrame("Frame", nil, f)
+  w:SetPoint("TOPLEFT", f.sub, "BOTTOMLEFT", -8, -4)
+  w:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4, 4)
+  if w.SetFrameLevel and f.GetFrameLevel then w:SetFrameLevel((f:GetFrameLevel() or 1) + 20) end
+  w:EnableMouse(true) -- (se traga los clics y el ratón sobre las filas)
+  local bg = w:CreateTexture(nil, "BACKGROUND")
+  bg:SetAllPoints()
+  bg:SetColorTexture(0, 0, 0, 0.8)
+  w.icon = w:CreateTexture(nil, "ARTWORK")
+  w.icon:SetSize(34, 34)
+  w.icon:SetPoint("CENTER", 0, 24)
+  w.icon:SetTexture(HOURGLASS)
+  w.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  if w.CreateMaskTexture and w.icon.AddMaskTexture then
+    local mask = w:CreateMaskTexture()
+    mask:SetAllPoints(w.icon)
+    mask:SetTexture(ROUND_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    w.icon:AddMaskTexture(mask)
+  end
+  w.ring = w:CreateTexture(nil, "OVERLAY")
+  w.ring:SetSize(62, 62)
+  w.ring:SetPoint("CENTER", w.icon, "CENTER")
+  w.ring:SetTexture(RING)
+  w.ring:SetVertexColor(1, 0.82, 0.25) -- (dorado, como los textos del addon)
+  w.text = w:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  w.text:SetPoint("TOP", w.icon, "BOTTOM", 0, -18) -- (debajo del anillo)
+  w.text:SetWidth(WIDTH - 40)
+  w.text:SetJustifyH("CENTER")
+  w.note = w:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  w.note:SetPoint("TOP", w.text, "BOTTOM", 0, -6)
+  w.note:SetWidth(WIDTH - 40)
+  w.note:SetJustifyH("CENTER")
+  w.note:SetText(L["Espera para anunciar: al acabar, los precios se actualizan solos."])
+  -- El anillo da vueltas (solo mientras se ve: OnUpdate no corre con la capa oculta)
+  local angle = 0
+  w:SetScript("OnUpdate", function(_, elapsed)
+    angle = (angle - (elapsed or 0) * RING_SPEED) % (2 * math.pi)
+    if w.ring.SetRotation then w.ring:SetRotation(angle) end
+  end)
+  w:Hide()
+  return w
+end
+
+-- La capa de espera según el escaneo (también al avanzar el %: ES:UpdatePostStatus)
+function Sell:UpdateWait()
+  if not (panel and panel.wait) then return end
+  local state, pct = ES.Ledger:PostPriceState()
+  if state == "scanning" then
+    panel.wait.text:SetText(string.format(L["Escaneando la AH... %d%%"], pct))
+    panel.wait:Show()
+  else
+    panel.wait:Hide()
+  end
+end
+
 local function CreatePanel(parent)
   local f = CreateFrame("Frame", "CraftersJournalAuctionSellPanel", parent or UIParent, "BackdropTemplate")
   f:SetWidth(WIDTH)
@@ -224,6 +289,7 @@ local function CreatePanel(parent)
   f.hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   f.hint:SetJustifyH("LEFT")
   if f.hint.SetSpacing then f.hint:SetSpacing(2) end
+  f.wait = CreateWait(f)
   f:Hide()
   return f
 end
@@ -258,9 +324,10 @@ function Sell:Refresh()
   panel = panel or CreatePanel(ah)
   Place(ah)
   if panel.SetFrameStrata and ah.GetFrameStrata then panel:SetFrameStrata(ah:GetFrameStrata()) end
-  -- Escaneando o precios viejos: en naranja en lugar del subtítulo (al escanear, el
-  -- clic no anuncia; ver Ledger:PostOnAH)
-  panel.sub:SetText(ES.Ledger:PostPriceWarning() or L["Para vender en la AH, de tus bolsas:"])
+  -- Precios viejos: en naranja en lugar del subtítulo. Escaneando lo dice la capa de
+  -- espera sobre las filas (Sell:UpdateWait; el clic no anuncia, Ledger:PostOnAH)
+  local scanning = ES.Ledger:PostPriceState() == "scanning"
+  panel.sub:SetText(not scanning and ES.Ledger:PostPriceWarning() or L["Para vender en la AH, de tus bolsas:"])
   local function H(fs) return math.min(tonumber(fs:GetStringHeight()) or 12, 40) end
   local y = -(10 + H(panel.title) + 3 + H(panel.sub) + 8)
   local shown = math.min(#list, MAX_ROWS)
@@ -300,6 +367,7 @@ function Sell:Refresh()
   panel.hint:SetText(hint)
   y = y - 4 - math.max(14, math.min(tonumber(panel.hint:GetStringHeight()) or 0, 70))
   panel:SetHeight(-y + 10)
+  self:UpdateWait()
   panel:Show()
   ES:WindowTip("sell") -- (la primera vez: se puede quitar en /cj opciones)
   PlaceShopping() -- (la lista de compra, a la derecha de esta)

@@ -681,29 +681,19 @@ step("ganar dinero (sin correo)", function()
   ES.Earn.VENDOR_MIN_GPH = savedVGPH
   ES.Earn:Clear()
 end)
-step("sin contabilidad: el cobro de una venta enseña el precio del vendedor", function()
+step("sin contabilidad ni precios aprendidos de tus ventas", function()
   assert(ES.Books == nil, "la contabilidad del dinero debería haberse quitado")
-  local saved = { GetMoney = GetMoney, MerchantFrame = MerchantFrame, seen = ES.db.sellSeen }
-  local money = 1000
-  GetMoney = function() return money end
-  MerchantFrame = CreateFrame("Frame")
-  MerchantFrame:Show()
-  ES.db.sellSeen = nil
-  local ok, err = pcall(function()
-    ES.Ledger.OnMoney() -- (punto de partida)
-    -- Vender 10 Light Leather (2318): el dinero sube 100 -> 10 cada uno
-    C_Container = C_Container or {}
-    local savedCC = C_Container
-    C_Container = { GetContainerItemInfo = function() return { itemID = 2318, stackCount = 10 } end,
-      GetContainerItemDurability = function() return nil end }
-    ES.Ledger.NoteSale(0, 1)
-    C_Container = savedCC
-    money = money + 100
-    ES.Ledger.OnMoney()
-    assert(ES.db.sellSeen and ES.db.sellSeen[2318] and ES.db.sellSeen[2318].price == 10, "no apuntó el cobro de la venta")
-  end)
-  GetMoney, MerchantFrame, ES.db.sellSeen = saved.GetMoney, saved.MerchantFrame, saved.seen
-  if not ok then error(err, 0) end
+  -- Ya no se aprende el precio del vendedor de tus ventas (dos cobradas juntas
+  -- dejaban el doble: Barbaric Leggings a 63s 02c, CurseForge): ni el código, ni lo
+  -- que quedara guardado de versiones anteriores
+  assert(ES.Ledger.NoteSale == nil and ES.Ledger.ChargeSale == nil and ES.Ledger.OnMoney == nil, "queda el código que aprendía de las ventas")
+  local savedSeen = ES.db.sellSeen
+  ES.db.sellSeen = { [5963] = { price = 6302, time = 0, ok = true } }
+  local data = ES.Data.SellPrices[5963]
+  local price = ES:VendorSellPrice(5963)
+  assert(price ~= 6302 and (price == data or price == select(11, GetItemInfo(5963))),
+    "un precio aprendido de versiones anteriores todavía cuenta: " .. tostring(price))
+  ES.db.sellSeen = savedSeen
 end)
 step("colección de recetas", function()
   local realSkill, realKnown = ES.GetProfessionSkill, ES.IsRecipeKnown
@@ -2122,44 +2112,6 @@ step("estrella sobre el PNJ al que te manda el addon", function()
   SetRaidTarget, WP.Go, WP.Available = savedSet, savedGo, savedAvail
   log[#log+1] = "     estrella: " .. macro:gsub("\n", " / ")
 end)
-step("precio real del vendedor, aprendido al vender", function()
-  -- Hillman's Shoulders: los datos del cliente dicen 11s 99c; el vendedor paga 6s 59c
-  local savedMF, savedCC, savedSeen = MerchantFrame, C_Container, ES.db.sellSeen
-  MerchantFrame = CreateFrame("Frame")
-  C_Container = { GetContainerItemInfo = function() return { itemID = 4251, stackCount = 10 } end }
-  ES.db.sellSeen = nil
-  ES.Ledger.NoteSale(0, 1)
-  ES.Ledger.ChargeSale(6590)
-  assert(ES:VendorSellPrice(4251) == 659, "no aprendió el precio real: " .. tostring(ES:VendorSellPrice(4251)))
-  -- Dos pilas vendidas seguidas: cada cobro con su venta (y al repetirse, vale)
-  C_Container.GetContainerItemInfo = function(_, slot) return { itemID = 2318, stackCount = slot } end
-  ES.Ledger.NoteSale(0, 20)
-  ES.Ledger.NoteSale(0, 5)
-  ES.Ledger.ChargeSale(200)
-  ES.Ledger.ChargeSale(50)
-  assert(ES:VendorSellPrice(2318) == 10, "dos pilas: " .. tostring(ES:VendorSellPrice(2318)))
-  -- Greater Magic Wand (paga 2s): un cobro que no es suyo no cambia su precio, y
-  -- lo guardado sin confirmar por versiones anteriores no cuenta
-  C_Container.GetContainerItemInfo = function() return { itemID = 11288, stackCount = 1 } end
-  ES.db.sellSeen[11288] = { price = 168, time = 0 }
-  assert(ES:VendorSellPrice(11288) ~= 168, "lo guardado sin confirmar no debería valer")
-  ES.Ledger.NoteSale(0, 1)
-  ES.Ledger.ChargeSale(150)
-  assert(ES:VendorSellPrice(11288) ~= 150, "un cobro ajeno no debería cambiar el precio")
-  ES.Ledger.NoteSale(0, 1)
-  ES.Ledger.ChargeSale(200)
-  assert(ES:VendorSellPrice(11288) == 200, "lo que coincide con lo conocido vale ya: " .. tostring(ES:VendorSellPrice(11288)))
-  -- Una pieza dañada cobra sin apuntarse: su dinero no es de la venta siguiente
-  local savedDur = C_Container.GetContainerItemDurability
-  C_Container.GetContainerItemDurability = function(_, slot) if slot == 1 then return 5, 10 end end
-  ES.Ledger.NoteSale(0, 1)
-  C_Container.GetContainerItemDurability = savedDur
-  ES.Ledger.NoteSale(0, 2)
-  ES.Ledger.ChargeSale(150)
-  ES.Ledger.ChargeSale(200)
-  assert(ES:VendorSellPrice(11288) == 200, "lo dañado se tomó por otra venta: " .. tostring(ES:VendorSellPrice(11288)))
-  MerchantFrame, C_Container, ES.db.sellSeen = savedMF, savedCC, savedSeen
-end)
 step("icono menos fabricaciones: pesa cada fabricación al elegir", function()
   local page
   for _, p in ipairs(ES.professionPages) do if p.profKey == "Enchanting" then page = p end end
@@ -3252,13 +3204,18 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
       assert(tostring(sp.sub._text):find("hace 3 h", 1, true) and tostring(sp.sub._text):find("ff9933"), "precios de hace 3 h, en naranja: " .. tostring(sp.sub._text))
       ES.Scanner.state, ES.Scanner.progress = "scanning", 0.45
       ES:UpdatePostStatus()
-      assert(tostring(sp.sub._text):find("45%", 1, true), "escaneando: el aviso con el %: " .. tostring(sp.sub._text))
+      -- Escaneando: la capa de espera tapa las filas (reloj de arena y %), sin el aviso arriba
+      assert(sp.wait and sp.wait._shown == true, "escaneando: sale la capa de espera")
+      assert(tostring(sp.wait.text._text):find("45%", 1, true), "la capa dice el %: " .. tostring(sp.wait.text._text))
+      assert(tostring(sp.sub._text):find("Para vender"), "escaneando, arriba el subtítulo de siempre: " .. tostring(sp.sub._text))
+      sp.wait._scripts.OnUpdate(sp.wait, 2) -- (el reloj se da la vuelta sin errores)
       ES.Scanner.progress = 0.8
       ES:UpdatePostStatus()
-      assert(tostring(sp.sub._text):find("80%", 1, true), "el % avanza sin recalcular: " .. tostring(sp.sub._text))
+      assert(tostring(sp.wait.text._text):find("80%", 1, true), "el % avanza sin recalcular: " .. tostring(sp.wait.text._text))
       ES.Scanner.state, ES.Scanner.progress = savedState, savedProg
       scanRow.time = time() - 60
       ES:UpdatePostStatus() -- acaba: la ventana se recalcula con los precios nuevos
+      assert(sp.wait._shown == false, "al acabar el escaneo, la capa de espera se quita")
       assert(tostring(sp.sub._text):find("Para vender"), "al acabar el escaneo, el subtítulo vuelve: " .. tostring(sp.sub._text))
       scanRow.time = savedTime
       ES.AuctionSell:Refresh()
@@ -3622,6 +3579,33 @@ step("novedades: una vez por versión, y en vista de desarrollo cuando quieras",
   since = ES:WhatsNewSince(previous, future)
   assert(#since == 2 and since[1].version == future, "las dos versiones nuevas, la más nueva arriba")
   table.remove(ES.WHATS_NEW, 1)
+  -- Saltándose versiones, en la ventana: UNA lista sin cabeceras de versión, como mucho
+  -- WHATS_NEW_MAX_ITEMS, y las destacadas (top) primero aunque sean de una versión anterior
+  do
+    local fakeTop = { version = future, items = {
+      { title = "nueva 1", text = "a" }, { title = "nueva 2", text = "b" } } }
+    local fakeOld = { version = midway, items = {
+      { title = "vieja 1", text = "c" }, { title = "destacada", text = "d", top = true },
+      { title = "vieja 3", text = "e" }, { title = "vieja 4", text = "f" }, { title = "vieja 5", text = "g" } } }
+    table.insert(ES.WHATS_NEW, 1, fakeOld)
+    table.insert(ES.WHATS_NEW, 1, fakeTop)
+    ES:ShowWhatsNew(ES:WhatsNewSince(latest, future))
+    local f2 = ES.WhatsNewFrame()
+    local titles = {}
+    for _, l in ipairs(f2.lines) do
+      if l._shown ~= false then
+        assert(l.icon._shown ~= false, "una fila sin icono: cabecera de versión (ya no las hay)")
+        titles[#titles + 1] = tostring(l.title._text)
+      end
+    end
+    assert(#titles == ES.WHATS_NEW_MAX_ITEMS, "como mucho " .. ES.WHATS_NEW_MAX_ITEMS .. ": " .. #titles)
+    assert(titles[1] == "destacada" and titles[2] == "nueva 1" and titles[3] == "nueva 2",
+      "la destacada primero, luego lo más nuevo: " .. table.concat(titles, " | "))
+    Hide()
+    table.remove(ES.WHATS_NEW, 1)
+    table.remove(ES.WHATS_NEW, 1)
+    log[#log+1] = "     novedades saltándose versiones: " .. table.concat(titles, " | ")
+  end
   -- Vista de desarrollo (/cj whatsnew, DevTools.lua: en esta copia sí está): no cambia lo visto
   assert(ES.DevCommand, "en la copia de desarrollo se carga DevTools.lua")
   local savedPrint = ES.Print
@@ -4412,7 +4396,7 @@ step("métodos de marcos que existen en el juego", function()
     SetStatusBarTexture SetTexCoord SetTextColor SetTexture SetThumbTexture SetToAlpha SetValue
     SetValueStep SetVertexColor SetVerticalScroll SetWidth SetWordWrap StartMoving Stop
     StopMovingOrSizing UnlockHighlight UnregisterAllEvents UpdateScrollChildRect
-    SetGradientAlpha SetRotation
+    SetGradientAlpha SetRotation CreateMaskTexture AddMaskTexture
   ]]):gmatch("%a+") do REAL[name] = true end
   -- (SetGradientAlpha ya no existe en el cliente, pero solo se usa protegida con
   -- "elseif tex.SetGradientAlpha" para clientes viejos: HomeUI.lua)

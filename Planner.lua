@@ -48,6 +48,12 @@ local FEE_SLACK = 0.75        -- se repite si se usó menos del 75% de lo supues
 -- Sin zigzag (ver Planner.Smooth)
 local SMOOTH_MIN = 3          -- pasos de menos puntos que esto son "cortos"
 local SMOOTH_TOLERANCE = 100  -- cobre que puede costar de más hacer el tramo con una sola receta
+-- Aprender una receta nueva para un paso de pocas fabricaciones tiene que ahorrar al
+-- menos esto frente a hacer esos puntos con la receta de al lado (ver PlanGPS)
+local LEARN_FEW_CRAFTS = 5    -- fabricaciones: paso "de pocas"
+local LEARN_WORTH = 500       -- cobre (5s)
+Planner.LEARN_FEW_CRAFTS, Planner.LEARN_WORTH = LEARN_FEW_CRAFTS, LEARN_WORTH
+function Planner.SetLearnWorth(v) LEARN_WORTH = v Planner.LEARN_WORTH = v end -- (pruebas: comparar con y sin)
 local SMOOTH_PCT = 0.005      -- o el 0,5% de los materiales, lo que sea mayor
 local SMOOTH_PASSES = 4       -- tramos que se arreglan como mucho
 -- Recetas de pergamino que se prueba a quitar al acabar la ruta (ver Planner:Plan)
@@ -1698,6 +1704,36 @@ function Planner.PlanGPS(data, opts)
     return found
   end
   if IngredientFirst() then Polish() end
+
+  -- Aprender una receta para unas pocas fabricaciones, solo si compensa: ir al
+  -- instructor por 1-5 fabricaciones que ahorran 2s no merece la pena (CurseForge:
+  -- "me manda aprender otra receta para 1 fabricación por ser más barato"). Esos
+  -- puntos se prueban con la receta de al lado (la anterior o la siguiente) y se
+  -- queda si cuesta como mucho LEARN_WORTH más; si ahorra más, aprenderla sí compensa
+  for _ = 1, 4 do
+    local changed = false
+    local steps = best.steps
+    for i, b in ipairs(steps) do
+      local learns = b.learnSource ~= nil and b.learnSource ~= "known"
+      if learns and (b.crafts or 0) <= LEARN_FEW_CRAFTS then
+        local cand
+        for _, nb in ipairs({ steps[i - 1], steps[i + 1] }) do
+          if nb and nb.id ~= b.id then
+            local choice = Copy(best.choice)
+            for s = b.from, b.to - 1 do choice[s] = nb.id end
+            -- (depth 0: si ese camino ya se recorrió, Walk lo devuelve; sin él, nil)
+            local q = Walk(choice, best.ctx.via, 0)
+            if q and q.reached >= best.reached and not q.unfollowable and Score(q) <= Score(best) + LEARN_WORTH
+              and (not cand or Score(q) < Score(cand)) then
+              cand = q
+            end
+          end
+        end
+        if cand then best, changed = cand, true break end
+      end
+    end
+    if not changed then break end
+  end
 
   -- Sin saltos: una receta unos pocos puntos en medio de otra (A, B 3 puntos, A otra
   -- vez: Bolt of Runecloth 210-215 dentro de Red Mageweave Headband) no tiene sentido

@@ -330,94 +330,18 @@ end
 Ledger.MerchantInfo = MerchantInfo
 
 ---------------------------------------------------------------------------
--- Lo que paga de verdad el vendedor: en Forever no siempre coincide con los datos
--- del cliente (Hillman's Shoulders: 6s 59c, no 11s 99c). Al vender algo con el
--- vendedor abierto (con el addon o a mano) se apunta qué y cuántos, y cuando sube
--- tu dinero, a cuánto salió cada uno: ES.db.sellSeen[itemID] = { price, time, ok }.
--- ES:VendorSellPrice lo usa antes que los datos solo si ok (coincide con lo conocido
--- o se ha visto dos veces seguidas)
+-- Lo que paga el vendedor: el precio que da el juego (o el de los datos), y nada
+-- más. Antes se "aprendía" de tus ventas (el dinero que entraba tras vender), pero
+-- el dinero entra por muchas cosas a la vez: dos ventas cobradas juntas dejaron
+-- Barbaric Leggings a 63s 02c en vez de 31s 51c y Ganar dinero prometía el doble
+-- (CurseForge). Con los datos del cliente de lanzamiento ya no hacía falta (de 120
+-- objetos vendidos, todos coincidían): se quitó, y lo aprendido se borra al entrar
+-- (Core.lua: ES.db.sellSeen)
 ---------------------------------------------------------------------------
-local sellPending = {} -- ventas enviadas aún sin cobrar: { itemID, count, t }
-local SELL_WINDOW = 3  -- s entre vender y que suba tu dinero
-
-local function NoteSale(bag, slot)
-  if not (MerchantFrame and MerchantFrame:IsShown()) then return end
-  local info = C_Container and C_Container.GetContainerItemInfo and C_Container.GetContainerItemInfo(bag, slot)
-  local itemID = info and info.itemID or ContainerItemID(bag, slot)
-  local count = info and info.stackCount or SlotCount(bag, slot)
-  -- Solo lo que el vendedor compra (sin valor: no hay venta que esperar) y sin
-  -- dañar (el equipo dañado se paga menos: no es su precio)
-  if not itemID or not count or count <= 0 or (info and info.hasNoValue) then return end
-  local getDur = C_Container and C_Container.GetContainerItemDurability or GetContainerItemDurability
-  local cur, max = getDur and getDur(bag, slot)
-  -- Lo dañado también cobra: ocupa su turno en la cola (sin apuntarse) para que su
-  -- dinero no se tome por el de la venta siguiente
-  local damaged = cur and max and max > 0 and cur < max
-  sellPending[#sellPending + 1] = { itemID = itemID, count = count, t = GetTime and GetTime() or 0, skip = damaged or nil }
-end
-if hooksecurefunc then
-  if C_Container and C_Container.UseContainerItem then
-    hooksecurefunc(C_Container, "UseContainerItem", NoteSale)
-  elseif UseContainerItem then
-    hooksecurefunc("UseContainerItem", NoteSale)
-  end
-end
-
--- Sube tu dinero: es el cobro de la venta pendiente más antigua (cada venta sube
--- el dinero por separado; vendiendo varias pilas seguidas, una tras otra). Lo llama
--- PLAYER_MONEY (abajo) con el vendedor abierto; devuelve la venta cobrada
-local LearnPrice
-local function ChargeSale(delta)
-  local now = GetTime and GetTime() or 0
-  while sellPending[1] and now - sellPending[1].t > SELL_WINDOW do table.remove(sellPending, 1) end
-  local p = table.remove(sellPending, 1)
-  if not p then return nil end
-  if not p.skip then LearnPrice(p, delta) end
-  return p
-end
-
-local function HasPendingSale() return sellPending[1] ~= nil end
-
--- El precio real del vendedor, de lo que cobró una venta
-function LearnPrice(p, delta)
-  local itemID = p.itemID
-  local unit = math.floor(delta / p.count + 0.5)
-  -- Solo si cuadra con el precio que se conocía (entre un 20% y el doble de los
-  -- datos o del cliente): otro dinero que llegue a la vez (botín, misión, correo)
-  -- no se apunta como precio de venta
-  local data = ES.Data.SellPrices[itemID]
-  local live = GetItemInfo and select(11, GetItemInfo(itemID))
-  local known = data or live
-  if not known or known <= 0 or unit < 0.2 * known or unit > 2 * known then return end
-  ES.db.sellSeen = ES.db.sellSeen or {}
-  local old = ES.db.sellSeen[itemID]
-  -- Un cobro suelto puede ser de otra cosa (una venta que no pasó por aquí, una
-  -- pieza dañada, dinero que llegó a la vez): un precio distinto del conocido solo
-  -- vale cuando se repite (Greater Magic Wand quedó en 1s 68c pagando 2s)
-  local ok = unit == data or unit == live or (old ~= nil and old.price == unit)
-  ES.db.sellSeen[itemID] = { price = unit, time = time(), ok = ok or nil }
-  if ok and not (old and old.ok and old.price == unit) then
-    Log(string.format("vendedor: %d paga %d cada uno", itemID, unit))
-    if ES.ClearHomeCache then ES:ClearHomeCache() end -- (lo que se recupera vendiendo cambia)
-  elseif old and old.ok and not ok then
-    if ES.ClearHomeCache then ES:ClearHomeCache() end -- (el anterior deja de valer)
-  end
-end
-Ledger.NoteSale, Ledger.ChargeSale, Ledger.HasPendingSale = NoteSale, ChargeSale, HasPendingSale
-
--- Cambia tu dinero: con el vendedor abierto y una venta enviada, es su cobro (de ahí
--- sale el precio real del vendedor, ver LearnPrice). No se apunta nada más del dinero
-local lastMoney
-function Ledger.OnMoney(money)
-  money = money or (GetMoney and GetMoney()) or 0
-  local delta = lastMoney and money - lastMoney or 0
-  lastMoney = money
-  if delta > 0 and Ledger:MerchantOpen() and HasPendingSale() then ChargeSale(delta) end
-end
 
 do
   local f = CreateFrame("Frame")
-  for _, e in ipairs({ "TRAINER_SHOW", "TRAINER_UPDATE", "PLAYER_ENTERING_WORLD", "PLAYER_MONEY",
+  for _, e in ipairs({ "TRAINER_SHOW", "TRAINER_UPDATE", "PLAYER_ENTERING_WORLD",
     "MERCHANT_SHOW", "MERCHANT_CLOSED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
     "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_AUCTION_CREATED", "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE",
     "COMMODITY_PURCHASE_SUCCEEDED", "COMMODITY_PURCHASE_FAILED", "BAG_UPDATE_DELAYED" }) do
@@ -467,9 +391,7 @@ do
       return
     end
     if event == "AUCTION_HOUSE_CLOSED" then Ledger.ahBusy = nil end
-    if event == "PLAYER_MONEY" then
-      Ledger.OnMoney()
-    elseif event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED" or event == "AUCTION_HOUSE_SHOW" or event == "AUCTION_HOUSE_CLOSED" then
+    if event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED" or event == "AUCTION_HOUSE_SHOW" or event == "AUCTION_HOUSE_CLOSED" then
       -- (la AH puede cargarse tarde: el gancho de las compras se pone al abrirla)
       if event == "AUCTION_HOUSE_SHOW" then pcall(Ledger.InstallPurchaseHook, Ledger) end
       -- La vista Profit cambia sus clics (vender al vendedor, anunciar en la AH)
@@ -479,7 +401,6 @@ do
       if not ok then Log("instructor: error leyendo precios: " .. tostring(err)) end
     elseif event == "PLAYER_ENTERING_WORLD" then
       ES.db.mailBought = nil -- compras de la AH "en el correo" (ya no se cuentan)
-      Ledger.OnMoney() -- (punto de partida del dinero)
     end
   end)
 end

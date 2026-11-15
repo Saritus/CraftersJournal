@@ -697,6 +697,9 @@ events:SetScript("OnEvent", function(_, event, arg1)
     ES:MigrateWindowOptions() -- (la ventana de vender en la AH, ahora con su propia opción)
     ES.db.devTools = nil -- (/cj devtools de una prueba: ahora es DevTools.lua, sin publicar)
     ES.Ledger:CleanTrainerFees() -- (lecturas de instructor con un nivel equivocado, una vez)
+    -- Precios de vendedor "aprendidos" de tus ventas: ya no se usan (Ledger.lua; dos
+    -- ventas cobradas juntas dejaban el doble). Fuera, con lo que se hubiera apuntado mal
+    ES.db.sellSeen, ES.db.sellSeenCleaned = nil, nil
     ES.ApplyLocalization()
     ES:LocalizeRecipeNames()
   elseif event == "PLAYER_LOGOUT" then

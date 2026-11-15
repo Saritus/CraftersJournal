@@ -1,5 +1,11 @@
 # Crafter's Journal
 
+## 0.57.0
+
+- **Vendor prices always come from the game.** The addon used to "learn" what vendors pay from the money you received after selling. When the game paid two sales at once, it could credit everything to one item and learn twice its price (Barbaric Leggings at 63s instead of 31s 51c), so Make Money promised twice the profit. Learning from sales is gone: vendor prices are the game's own, which match what vendors pay, and any price learned by older versions is cleared when you log in.
+- **Routes only send you to learn a recipe for a few crafts when it's worth it.** A route could ask you to learn a new recipe for just 1-5 crafts because it saved a couple of silver, which isn't worth the trip to the trainer. Now, for a short step like that, the route tries those levels with the recipe next to it, and keeps the new recipe only if it saves more than 5s.
+- **You can see at a glance when to wait before posting.** While the AH is being scanned, the AH sell window is covered by a dark layer with an hourglass inside a spinning ring and the scan's progress, and its rows can't be clicked. When the scan ends, the layer goes away and the prices are the current ones. Before, only a small orange line at the top said so.
+
 ## 0.56.0
 
 - **Routes show how long crafting takes.** Some Forever recipes take 30-50 seconds per craft. A route step now shows its crafting time when each craft is slow (in orange) or the step is long, and its tooltip gives the time per craft and for the whole step. The route's Total row says how long the whole route takes to craft. If a step is too slow for you, remove it with its X and the route picks another recipe.
