@@ -674,6 +674,8 @@ events:SetScript("OnEvent", function(_, event, arg1)
     ES.db.activeAH = nil -- (la última AH abierta: siempre es la de tu facción, ver RealmKey)
     ES.db.sellGear = nil -- (la opción del equipo es ahora protectGear, desactivada por defecto)
     ES.db.atrPrices = nil -- (precios de las búsquedas en Auctionator: ya no hay botón)
+    ES:MigrateWindowOptions() -- (la ventana de vender en la AH, ahora con su propia opción)
+    ES.db.devTools = nil -- (/cj devtools de una prueba: ahora es DevTools.lua, sin publicar)
     ES.ApplyLocalization()
     ES:LocalizeRecipeNames()
   elseif event == "PLAYER_LOGOUT" then
@@ -735,6 +737,8 @@ SLASH_CRAFTERSJOURNAL2 = "/cj"
 SLASH_CRAFTERSJOURNAL3 = "/es" -- el de antes (cuando se llamaba EasySkills)
 SlashCmdList.CRAFTERSJOURNAL = function(msg)
   msg = strtrim(msg or ""):lower()
+  -- Comandos del desarrollador (DevTools.lua: solo en su copia, no se publica)
+  if ES.DevCommand and ES.DevCommand(msg) then return end
   if msg == "scan" then
     ES:ShowMainFrame()
     ES.Scanner:Start()

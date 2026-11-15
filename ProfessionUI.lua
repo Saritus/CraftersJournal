@@ -2565,7 +2565,8 @@ local function SaleAction(d, advice, page)
   elseif ES:IsAuctionHouseOpen() and toAH > 0 then
     -- Las que diga la ruta, como mucho las que llevas; a platas enteras (la AH de Forever)
     local price = Ledger.PostPrice(advice.price)
-    return function() Ledger:PostOnAH(d.itemID, toAH, price) C_Timer.After(0.5, Done) end, nil,
+    -- (con confirmación, si está activada: AuctionSellUI.lua)
+    return function() ES.AuctionSell.Post(d.itemID, toAH, price, nil, function() C_Timer.After(0.5, Done) end) end, nil,
       string.format(L["Anunciar %d en la AH a %s"], toAH, ES.Money(price))
   elseif ES:IsAuctionHouseOpen() and advice.ah > 0 then
     -- AH abierta pero no llevas ninguno encima (en el banco o aún sin fabricar): el

@@ -374,6 +374,19 @@ function Planner.Chance(t, skill)
   return math.min(1, (grey - skill) / (grey - yellow) * (1 + (Planner.SKILL_BONUS or 0)))
 end
 
+-- Recetas con enfriamiento (Transmute: Iron to Gold, una al día; Mooncloth, cada
+-- 4 días). CurseForge: la ruta pedía 186 transmutaciones de 225 a 280 porque era lo
+-- más barato. En la ruta valen como mucho para un punto, y solo en naranja (una sola
+-- fabricación). Transmute: Elemental Fire no tiene enfriamiento. r.cd, si los datos
+-- lo traen, manda
+local NO_COOLDOWN = { [25146] = true }
+local COOLDOWN = { [18560] = true } -- Mooncloth
+function Planner.Cooldown(r, id)
+  if r.cd ~= nil then return r.cd end
+  if NO_COOLDOWN[id] then return false end
+  return COOLDOWN[id] or (r.name or ""):find("^Transmute") ~= nil
+end
+
 -- Donde la ruta se para (no hay materiales para un punto entero: Rough Grinding
 -- Stone al 62% pide 1,6 fabricaciones y llevas piedra para 1), lo que puedes
 -- intentar con lo que llevas: la receta que sabes con más probabilidad de subir
@@ -1066,7 +1079,8 @@ local function GPSRecipes(data, opts, ctx)
           fee = cost and fee + cost or nil
         end
         if fee then
-          list[#list + 1] = { id = id, r = r, learn = learn, fee = fee, sale = Planner.SaleInfo(ctx, r) }
+          list[#list + 1] = { id = id, r = r, learn = learn, fee = fee, sale = Planner.SaleInfo(ctx, r),
+            cd = Planner.Cooldown(r, id) }
         end
       end
     end
@@ -1082,33 +1096,44 @@ local function ShortestRoute(data, opts, ctx, weight, skip, fixed, paid)
   local prev = {}
   for i = 1, #recipes do prev[i] = INF end
   local bestAll, bestIdx = 0, nil -- al empezar: nada pagado, ninguna receta
+  -- (y la segunda mejor, de otra receta: una con enfriamiento no sigue a sí misma)
+  local best2All, best2Idx = INF, nil
   local back, last = {}, nil
   for s = opts.from, opts.to - 1 do
     local cur, b = {}, {}
-    local newBest, newIdx = INF, nil
+    local newBest, newIdx, newBest2, newIdx2 = INF, nil, INF, nil
     for i, rc in ipairs(recipes) do
       ES.Yield()
       local c = INF
       local allowed = not skip[rc.id] and (not (fixed and fixed[s]) or fixed[s] == rc.id)
+      -- Con enfriamiento (ver Planner.Cooldown): un solo punto, en naranja
+      if allowed and rc.cd and Planner.Chance(rc.r.t, s) < 1 then allowed = false end
       if allowed and rc.learn <= s and (prev[i] < INF or bestIdx or s == opts.from) then
         local pc = PointCost(ctx, rc, s)
         if pc then
           local point = pc[1] + weight * pc[2]
+          local base, baseIdx = bestAll, bestIdx
+          if rc.cd and bestIdx == i then base, baseIdx = best2All, best2Idx end
           -- (paid: recetas que la ruta ya aprende en otro tramo: no se pagan otra vez)
-          local switch = bestAll + (paid and paid[rc.id] and 0 or rc.fee) + GPS_STEP_COST
-          if prev[i] <= switch then
+          local switch = base + (paid and paid[rc.id] and 0 or rc.fee) + GPS_STEP_COST
+          if not rc.cd and prev[i] <= switch then
             c, b[i] = prev[i] + point, i
-          else
-            c, b[i] = switch + point, bestIdx
+          elseif switch < INF then
+            c, b[i] = switch + point, baseIdx
           end
         end
       end
       cur[i] = c
-      if c < newBest then newBest, newIdx = c, i end
+      if c < newBest then
+        newBest2, newIdx2 = newBest, newIdx
+        newBest, newIdx = c, i
+      elseif c < newBest2 then
+        newBest2, newIdx2 = c, i
+      end
     end
     if not newIdx then break end -- ninguna receta sigue: la ruta llega hasta aquí
     back[s], last = b, s
-    prev, bestAll, bestIdx = cur, newBest, newIdx
+    prev, bestAll, bestIdx, best2All, best2Idx = cur, newBest, newIdx, newBest2, newIdx2
   end
   if not last then return nil end
   local choice, i = {}, bestIdx
@@ -1891,7 +1916,8 @@ function Planner:Plan(data, opts)
     -- opts.excluded: recetas que el jugador ha quitado de la ruta (p. ej. el pergamino está lejos)
     if learn and learn < opts.to and r.t[4] > opts.from and not (opts.excluded and opts.excluded[id]) then
       local learnCost, learnSource = Planner.LearnCost(ctx, r)
-      info[id] = { learn = learn, sale = Planner.SaleInfo(ctx, r), learnCost = learnCost, learnSource = learnSource }
+      info[id] = { learn = learn, sale = Planner.SaleInfo(ctx, r), learnCost = learnCost, learnSource = learnSource,
+        cd = Planner.Cooldown(r, id) }
     end
   end
 
@@ -1904,6 +1930,7 @@ function Planner:Plan(data, opts)
   local keptFor = {}  -- [itemID] = { [recetaQueLoUsa] = unidades }
   local ownedQty = {} -- [itemID] = unidades que se usan de tus bolsas/banco
   local perPoint = {}
+  local cdUsed = {} -- recetas con enfriamiento ya usadas para su punto (ver Planner.Cooldown)
   local lastWhy
   -- Puntos de media que ya han dado los materiales fabricados por el camino (ver
   -- CraftBonus): al llegar a uno entero, ese nivel no pide fabricar nada
@@ -1938,6 +1965,8 @@ function Planner:Plan(data, opts)
       if inf.learn <= s and (not forced or forced == id) then
         local r = data.recipes[id]
         local chance = Planner.Chance(r.t, s)
+        -- Con enfriamiento: un solo punto en toda la ruta, y en naranja (una fabricación)
+        if inf.cd and (cdUsed[id] or chance < 1) then chance = 0 end
         if chance > 0 then
           local crafts = 1 / chance
           local whyR = {}
@@ -2023,6 +2052,7 @@ function Planner:Plan(data, opts)
 
     -- Confirmar: gastar existencias de la AH y del inventario, y anotar compras
     learned[best.id] = true
+    if info[best.id].cd then cdUsed[best.id] = true end
     for key, q in pairs(best.extra) do
       if type(key) == "string" then
         local itemID = tonumber(key:sub(2))
@@ -2427,8 +2457,9 @@ function Planner.BagsAlternative(data, plan, owned, from, excluded, onlyWorth)
   excluded = excluded or ctx.opts.excluded or {}
   local best
   for id, r in pairs(data.recipes) do
+    -- (las de enfriamiento no: dan un punto como mucho, ver Planner.Cooldown)
     local learn = r.out and not inRoute[id] and not excluded[id] and not r.conversion and not r.intermediate
-      and Planner.LearnSkill(r, ctx.opts)
+      and not Planner.Cooldown(r, id) and Planner.LearnSkill(r, ctx.opts)
     if learn and learn < to and r.t[4] > from then
       -- Fabricaciones que te dan tus materiales (lo del vendedor se compra)
       local crafts, mine = math.huge, false

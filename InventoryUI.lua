@@ -380,7 +380,11 @@ Inventory.Tooltip = Tooltip -- (también la ventana junto a la AH, AuctionSellUI
 -- Clic: con la AH abierta anuncia lo que va a la AH; con el vendedor, vende lo suyo
 local function Act(e)
   if e.ahN > 0 and ES:IsAuctionHouseOpen() then
-    ES.Ledger:PostOnAH(e.itemID, e.ahN, e.listPrice, e.hours)
+    -- (con confirmación, si está activada: AuctionSellUI.lua)
+    ES.AuctionSell.Post(e.itemID, e.ahN, e.listPrice, e.hours, function()
+      C_Timer.After(0.6, function() ES:RenderInventory() end)
+    end)
+    return
   elseif e.vendorN > 0 and ES.Ledger:MerchantOpen() then
     ES.Ledger:SellToVendor(e.itemID, e.vendorN)
   else

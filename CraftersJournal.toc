@@ -58,3 +58,7 @@ VendorUI.lua
 AuctionSellUI.lua
 CraftWindowUI.lua
 Options.lua
+WhatsNew.lua
+#@do-not-package@
+DevTools.lua
+#@end-do-not-package@

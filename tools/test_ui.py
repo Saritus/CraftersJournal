@@ -87,6 +87,7 @@ loader = lua.eval("function(src, name, ES) assert(loadstring(src, '@' .. name))(
 for f in files:
     loader((ADDON / f.replace("\\", "/")).read_text(encoding="utf-8"), f, ES)
 lua.globals().ES = ES
+lua.globals().TOC_TEXT = toc  # (para comprobar lo que no se publica)
 lua.execute("SOURCES, SOURCE_NAMES = {}, {}")
 for f in files:
     lua.eval("function(s, n) SOURCES[#SOURCES + 1] = s SOURCE_NAMES[#SOURCES] = n end")(
@@ -3014,7 +3015,38 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
   local posted
   ES.IsAuctionHouseOpen = function() return true end
   ES.Ledger.PostOnAH = function(_, id, n, price) posted = { id, n, price } end
-  for _, row in ipairs(page.rows) do if row.onClick and row.title and tostring(row.title._text):find("3×") then row.onClick() end end
+  -- Primero pregunta (opción activada por defecto); Anunciar anuncia, Cancelar no
+  local savedNoConfirm, savedPrintC = ES.db.noPostConfirm, ES.Print
+  ES.db.noPostConfirm = nil
+  local function ClickUp()
+    for _, row in ipairs(page.rows) do if row.onClick and row.title and tostring(row.title._text):find("3×") then row.onClick() end end
+  end
+  ClickUp()
+  local dlg = CraftersJournalPostConfirm
+  assert(dlg and dlg._shown and not posted, "con la confirmación activada, el clic pregunta antes de anunciar")
+  assert(tostring(dlg.text._text):find("3", 1, true) and tostring(dlg.note._text):find("/cj opciones", 1, true),
+    "la confirmación dice cuántos y dónde se vuelve a activar: " .. tostring(dlg.text._text))
+  dlg.cancel._scripts.OnClick(dlg.cancel)
+  assert(not dlg._shown and not posted, "Cancelar no anuncia")
+  ClickUp()
+  dlg.ok._scripts.OnClick(dlg.ok)
+  assert(posted and posted[1] == UP and posted[2] == 3, "Anunciar en la confirmación no anunció")
+  assert(not ES.db.noPostConfirm, "sin marcar la casilla, sigue preguntando")
+  -- "No volver a preguntar": apaga la opción y desde entonces anuncia directamente
+  posted = nil
+  ES.Print = function() end
+  ClickUp()
+  dlg.check:SetChecked(true)
+  dlg.ok._scripts.OnClick(dlg.ok)
+  assert(posted and ES.db.noPostConfirm == true, "con la casilla marcada, anuncia y deja de preguntar")
+  ES.Print = savedPrintC
+  -- Una sola unidad no pregunta (un clic sin querer no anuncia un montón)
+  ES.db.noPostConfirm, posted = nil, nil
+  ES.AuctionSell.Post(UP, 1, 500, 24)
+  assert(posted and posted[2] == 1 and not dlg._shown, "una sola unidad se anuncia sin preguntar")
+  ES.db.noPostConfirm = true
+  posted = nil
+  ClickUp()
   assert(posted and posted[1] == UP and posted[2] == 3, "el clic con la AH abierta no anunció")
   -- Ventana junto a la AH: lo que el Inventario manda a la AH, con clic para anunciar
   do
@@ -3022,6 +3054,11 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     CraftersJournalMainFrame = nil -- (con la ventana grande al lado de la AH no sale)
     AuctionHouseFrame = CreateFrame("Frame")
     ES.AuctionSell.closed = nil
+    -- Por defecto la ventana de vender sale, y la primera vez avisa de que se puede quitar
+    local savedSellOpt, savedTips, savedPrintT = ES.db.noAuctionSellWindow, ES.db.windowTips, ES.Print
+    ES.db.noAuctionSellWindow, ES.db.windowTips = nil, nil
+    local tips = {}
+    ES.Print = function(_, m) tips[#tips + 1] = tostring(m) end
     -- (un objeto azul, como los da el juego: el nombre sale con el color de su calidad)
     local savedData, savedQC = ES.GetItemData, ITEM_QUALITY_COLORS[3]
     ES.GetItemData = function(_, id) if id == UP then return "Blue Thing", 3, 134400 end return savedData(ES, id) end
@@ -3030,6 +3067,17 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     ES.GetItemData, ITEM_QUALITY_COLORS[3] = savedData, savedQC
     local sp = CraftersJournalAuctionSellPanel
     assert(sp and sp._shown == true, "con la AH abierta sale la ventana de vender en la AH")
+    assert(#tips == 1 and tips[1]:find("/cj opciones", 1, true), "la primera vez, el aviso de que se puede quitar: " .. table.concat(tips, " | "))
+    ES:WindowTip("sell")
+    assert(#tips == 1, "el aviso solo sale una vez")
+    -- Engranaje junto a la ✕: abre las opciones
+    local savedOpen, opened = ES.OpenOptions, false
+    ES.OpenOptions = function() opened = true end
+    assert(sp.optionsGear, "la ventana de vender tiene el engranaje de opciones")
+    sp.optionsGear._scripts.OnClick(sp.optionsGear)
+    assert(opened, "el engranaje abre las opciones")
+    ES.OpenOptions = savedOpen
+    ES.Print = savedPrintT
     local upRow
     for _, row in ipairs(sp.rows) do if row._shown ~= false and row.entry and row.entry.itemID == UP then upRow = row end end
     assert(upRow and upRow.entry.ahN == 3, "la ventana de la AH lista lo que va a la AH")
@@ -3087,18 +3135,44 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     end
     ES.db.neverSell, ES.Print = savedNever, savedPrint
     ES.AuctionSell:Refresh()
-    -- Opciones: sin las ventanas de la AH, la de vender no sale (ni la lista de compra)
+    -- Opciones: cada ventana con su casilla. Sin la lista de compra, la de vender sigue
     local wasShown = sp._shown
     ES:SetOption("noAuctionWindows", false)
-    assert(sp._shown == false, "con las ventanas de la AH desactivadas, la de vender no sale")
+    assert(sp._shown == wasShown, "sin la lista de compra, la de vender sigue saliendo")
     local mini = ES.ShoppingMini()
-    assert(not mini or mini._shown == false, "con las ventanas de la AH desactivadas, la lista de compra no sale sola")
+    assert(not mini or mini._shown == false, "con la lista de compra desactivada, no sale sola")
     ES:SetOption("noAuctionWindows", true)
-    assert(sp._shown == wasShown and ES.db.noAuctionWindows == nil, "activadas otra vez, la de vender vuelve")
-    log[#log+1] = "     opciones: las ventanas de la AH se quitan y vuelven con su casilla"
+    assert(ES.db.noAuctionWindows == nil, "la lista de compra, activada otra vez")
+    local sellOpt
+    for _, cb in ipairs(ES:OptionsPanel().checks) do if cb.option.key == "noAuctionSellWindow" then sellOpt = cb.option end end
+    assert(sellOpt, "la opción de la ventana de vender está en el panel")
+    ES:SetOption("noAuctionSellWindow", false)
+    assert(sp._shown == false and ES.db.noAuctionSellWindow == true, "desactivada, la ventana de vender no sale")
+    ES:SetOption("noAuctionSellWindow", true)
+    assert(sp._shown == wasShown and ES.db.noAuctionSellWindow == nil, "activada otra vez, la de vender vuelve")
+    -- Quien había quitado las ventanas de la AH (eran una opción) sigue sin la de vender
+    local m = { noAuctionWindows = true }
+    local savedDB = ES.db
+    ES.db = m
+    ES:MigrateWindowOptions()
+    assert(m.noAuctionSellWindow == true and m.sellWindowSplit, "migración: sin ventanas de la AH, tampoco la de vender")
+    m.noAuctionSellWindow = nil
+    ES:MigrateWindowOptions()
+    assert(m.noAuctionSellWindow == nil, "la migración solo se hace una vez")
+    ES.db = savedDB
+    log[#log+1] = "     opciones: la lista de compra y la ventana de vender, cada una con su casilla"
+    -- La ✕ de la ventana de vender: la lista de compra se recoloca junto a la AH (sin hueco)
+    local savedPlace, placed = ES.PlaceShoppingMini, false
+    ES.PlaceShoppingMini = function() placed = true end
+    local okClose, errClose = pcall(sp.closeButton._scripts.OnClick, sp.closeButton)
+    assert(okClose, "la ✕ de la ventana de vender da error: " .. tostring(errClose))
+    assert(placed and sp._shown == false, "al cerrar la de vender, la lista de compra se recoloca")
+    ES.PlaceShoppingMini, ES.AuctionSell.closed = savedPlace, nil
+    ES.AuctionSell:Refresh()
     CraftersJournalMainFrame = savedMain
     ES.AuctionSell:Refresh()
     assert(sp._shown == false, "con la ventana grande al lado de la AH, la de vender no sale")
+    ES.db.noAuctionSellWindow, ES.db.windowTips = savedSellOpt, savedTips
     AuctionHouseFrame = savedAHF
   end
   -- La ventana junto al vendedor vende también lo que el Inventario manda al vendedor
@@ -3141,6 +3215,7 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
   C_Container, ES.db.scans, ES.VendorSellPrice = savedCC, savedScans, savedVendor
   ES.Market.ReferencePrice, ES.Market.Signals, ES.RouteLock, ES.LockedPlan, ES.Planner.NeedFrom = savedRef, savedSig, savedLock, savedLocked, savedNeed
   ES.Ledger.MerchantOpen, ES.Ledger.SellToVendor, ES.Ledger.PostOnAH, ES.IsAuctionHouseOpen = savedMerchant, savedSell, savedPost, savedAH
+  ES.db.noPostConfirm = savedNoConfirm
   ES:SelectPage("home")
 end)
 step("anunciar con la AH ocupada: un aviso, no uno por clic", function()
@@ -3346,6 +3421,67 @@ step("inventario: lo que daría desencantar (solo informativo)", function()
   C_Container, ES.db.scans, ES.VendorSellPrice, GetItemInfo = savedCC, savedScans, savedVendor, savedGII
   ES.GetProfessionSkill, GetSpellInfo, ES.Market.Signals = savedSkill, savedSpell, savedSig
   ES:SelectPage("home")
+end)
+step("novedades: una vez por versión, y en vista de desarrollo cuando quieras", function()
+  local savedGet, savedSeen, savedScans, savedPage, savedDev = GetAddOnMetadata, ES.db.whatsNewSeen, ES.db.scans, ES.db.lastPage, ES.db.devTools
+  local version = "0.48.0"
+  GetAddOnMetadata = function(_, field) if field == "Version" then return version end end
+  local function Shown() local f = ES.WhatsNewFrame() return f and f._shown end
+  local function Hide() local f = ES.WhatsNewFrame() if f then f:Hide() end end
+  -- Comparar versiones número a número (0.10 va después de 0.9)
+  assert(ES.CompareVersions("0.48.0", "0.47.0") == 1 and ES.CompareVersions("0.9.0", "0.10.0") == -1
+    and ES.CompareVersions("1.0", "1.0.0") == 0, "comparar versiones")
+  -- Instalación nueva: no sale, se apunta la versión
+  ES.db.whatsNewSeen, ES.db.scans, ES.db.lastPage = nil, {}, nil
+  ES:CheckWhatsNew()
+  assert(not Shown() and ES.db.whatsNewSeen == version, "en una instalación nueva no salen novedades")
+  -- Quien venía de antes (sin versión vista, pero con escaneos): la de esta versión
+  ES.db.whatsNewSeen, ES.db.scans = nil, savedScans
+  ES:CheckWhatsNew()
+  assert(Shown() and ES.db.whatsNewSeen == version, "al actualizar desde antes de las novedades, salen")
+  local f = ES.WhatsNewFrame()
+  assert(tostring(f.sub._text):find(version, 1, true), "la cabecera dice la versión: " .. tostring(f.sub._text))
+  local items = 0
+  for _, l in ipairs(f.lines) do if l._shown ~= false and l.icon._shown ~= false and tostring(l.text._text) ~= "" then items = items + 1 end end
+  assert(items == #ES.WHATS_NEW[1].items, "una fila por novedad: " .. items)
+  assert(tostring(f.devTag._text) == "", "sin vista de desarrollo, no lo dice")
+  Hide()
+  -- Otra vez con la misma versión: no sale
+  ES:CheckWhatsNew()
+  assert(not Shown(), "con la versión ya vista, no vuelve a salir")
+  -- Versión nueva sin notas: no sale, pero se apunta
+  version = "0.48.1"
+  ES:CheckWhatsNew()
+  assert(not Shown() and ES.db.whatsNewSeen == "0.48.1", "una versión sin notas no abre la ventana")
+  -- Saltándose versiones: desde la vista hasta la actual, nunca las aún sin publicar
+  local fake = { version = "0.49.0", items = { { title = "x", text = "y" } } }
+  table.insert(ES.WHATS_NEW, 1, fake)
+  local since = ES:WhatsNewSince("0.47.0", "0.48.5")
+  assert(#since == 1 and since[1].version == "0.48.0", "solo las publicadas y no vistas")
+  since = ES:WhatsNewSince("0.47.0", "0.49.0")
+  assert(#since == 2 and since[1].version == "0.49.0", "las dos versiones nuevas, la más nueva arriba")
+  table.remove(ES.WHATS_NEW, 1)
+  -- Vista de desarrollo (/cj whatsnew, DevTools.lua: en esta copia sí está): no cambia lo visto
+  assert(ES.DevCommand, "en la copia de desarrollo se carga DevTools.lua")
+  local savedPrint = ES.Print
+  ES.Print = function() end
+  local seenBefore = ES.db.whatsNewSeen
+  SlashCmdList.CRAFTERSJOURNAL("whatsnew 0.48.0")
+  assert(Shown() and ES.db.whatsNewSeen == seenBefore, "la vista de desarrollo se abre y no cuenta como vista")
+  assert(tostring(ES.WhatsNewFrame().devTag._text) ~= "", "la vista de desarrollo lo dice abajo")
+  Hide()
+  -- Sin DevTools.lua (lo publicado), /cj whatsnew es como /cj: abre la ventana principal
+  local savedDevCmd, savedToggle, toggled = ES.DevCommand, ES.ToggleMainFrame, false
+  ES.DevCommand, ES.ToggleMainFrame = nil, function() toggled = true end
+  SlashCmdList.CRAFTERSJOURNAL("whatsnew")
+  assert(toggled and not Shown(), "sin DevTools.lua, /cj whatsnew no abre las novedades")
+  ES.DevCommand, ES.ToggleMainFrame, ES.Print = savedDevCmd, savedToggle, savedPrint
+  -- Lo publicado no lleva DevTools.lua: su línea del .toc va en #@do-not-package@
+  assert(TOC_TEXT:find("#@do%-not%-package@%s+DevTools%.lua%s+#@end%-do%-not%-package@"),
+    "DevTools.lua debe ir dentro de #@do-not-package@ en el .toc")
+  GetAddOnMetadata = savedGet
+  ES.db.whatsNewSeen, ES.db.scans, ES.db.lastPage, ES.db.devTools = savedSeen, savedScans, savedPage, savedDev
+  log[#log+1] = "     novedades: una vez por versión, nada en instalaciones nuevas, /cj whatsnew solo en la copia de desarrollo"
 end)
 step("sin modo desarrollo: ni Subastas, ni Flipping, ni Pesca, ni buscador", function()
   assert(ES.DEV == nil and ES.DEV_BUILD == nil, "queda el modo desarrollo")

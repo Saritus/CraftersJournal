@@ -512,11 +512,24 @@ end
 -- `followed`: el escaneo lo pidió otro addon (ForeverForge al abrir la AH) y solo se
 -- leyeron sus datos: no se abre la ventana, que si no se abría sola cada vez que
 -- abrías la AH. Con el escaneo que pides tú (botón Escanear), sí, para ver el resultado
+-- Cada parte en su fotograma (todo junto era un tirón al acabar el escaneo), y lo que
+-- tarda cada una al registro de escaneos (/cj, Informar de un error)
 function ES:OnScanComplete(scan, followed)
   if not followed then self:ShowMainFrame() end
-  self:RefreshAllViews() -- precios nuevos: todos los apartados
-  self.Collection:AlertScan(scan) -- pergaminos de botín que te faltan, en la AH
-  self:AnnounceRouteDrift() -- ruta empezada que ahora cuesta bastante más
+  local function Timed(label, f)
+    local t = debugprofilestop and debugprofilestop()
+    f()
+    if t then ES:ScanLog(string.format("%s: %.0f ms", label, debugprofilestop() - t)) end
+  end
+  Timed("vistas", function() self:RefreshAllViews() end) -- precios nuevos: todos los apartados
+  C_Timer.After(0, function()
+    -- pergaminos de botín que te faltan, en la AH
+    Timed("recetas en la AH", function() self.Collection:AlertScan(scan) end)
+    C_Timer.After(0, function()
+      -- ruta empezada que ahora cuesta bastante más
+      Timed("ruta empezada", function() self:AnnounceRouteDrift() end)
+    end)
+  end)
 end
 
 ---------------------------------------------------------------------------

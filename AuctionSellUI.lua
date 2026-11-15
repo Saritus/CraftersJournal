@@ -1,7 +1,8 @@
 local _, ES = ...
 local L = ES.L
 
--- Al abrir la Casa de Subastas sale al lado una ventana (como la del vendedor,
+-- Se quita con la opción "Vender en la AH desde tus bolsas" (ES.db.noAuctionSellWindow,
+-- Options.lua). Al abrir la Casa de Subastas sale al lado una ventana (como la del vendedor,
 -- VendorUI.lua) con lo que la pestaña Inventario dice que vendas en la AH: cuántos,
 -- a cuánto y lo que te queda tras la comisión. Clic en una fila: anuncia todas las
 -- de la fila; Mayús+clic, solo una (un anuncio por clic: la AH pide un clic del
@@ -39,6 +40,91 @@ local function AHFrame()
   return AuctionHouseFrame or AuctionFrame
 end
 
+---------------------------------------------------------------------------
+-- Confirmar antes de anunciar (todos los sitios que anuncian: esta ventana, el
+-- Inventario y la vista Profit). CurseForge: un clic sin querer anunció de golpe lo que
+-- acababa de comprar. Con la casilla "No volver a preguntar" se apaga la opción
+-- (ES.db.noPostConfirm, Options.lua), que se vuelve a encender en /cj opciones.
+-- El anuncio sale del clic en Anunciar: la AH pide un clic del jugador para cada uno
+---------------------------------------------------------------------------
+local confirm
+local function ConfirmDialog()
+  if confirm then return confirm end
+  local d = CreateFrame("Frame", "CraftersJournalPostConfirm", UIParent, "BackdropTemplate")
+  confirm = d
+  d:SetSize(380, 170)
+  d:SetPoint("CENTER", 0, 120)
+  d:SetFrameStrata("DIALOG")
+  d:EnableMouse(true)
+  d:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 },
+  })
+  tinsert(UISpecialFrames, "CraftersJournalPostConfirm") -- Escape: cancelar
+  d.title = d:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  d.title:SetPoint("TOP", 0, -20)
+  d.text = d:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  d.text:SetPoint("TOP", d.title, "BOTTOM", 0, -10)
+  d.text:SetWidth(330)
+  d.check = CreateFrame("CheckButton", nil, d, "UICheckButtonTemplate")
+  d.check:SetSize(24, 24)
+  d.check:SetPoint("TOPLEFT", 24, -78)
+  d.checkLabel = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  d.checkLabel:SetPoint("LEFT", d.check, "RIGHT", 2, 1)
+  d.note = d:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  d.note:SetPoint("TOPLEFT", d.check, "BOTTOMLEFT", 4, -1)
+  d.note:SetWidth(320)
+  d.note:SetJustifyH("LEFT")
+  d.ok = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
+  d.ok:SetSize(120, 24)
+  d.ok:SetPoint("BOTTOMRIGHT", d, "BOTTOM", -4, 18)
+  d.cancel = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
+  d.cancel:SetSize(120, 24)
+  d.cancel:SetPoint("BOTTOMLEFT", d, "BOTTOM", 4, 18)
+  d.cancel:SetScript("OnClick", function() d.pending = nil d:Hide() end)
+  d.ok:SetScript("OnClick", function()
+    local p = d.pending
+    d.pending = nil
+    d:Hide()
+    if d.check:GetChecked() then
+      ES.db.noPostConfirm = true
+      ES:Print(L["Ya no se pide confirmación al anunciar. Se vuelve a activar en /cj opciones."])
+    end
+    if p then
+      ES.Ledger:PostOnAH(p.itemID, p.n, p.unit, p.hours)
+      if p.done then p.done() end
+    end
+  end)
+  d:Hide()
+  return d
+end
+
+-- Anuncia `n` de `itemID` a `unit` cada uno (`hours` h), preguntando antes si la opción
+-- está activada. `done`: lo que se hace después (repintar)
+function Sell.Post(itemID, n, unit, hours, done)
+  if not n or n <= 0 then return end
+  -- Sin confirmar: una sola unidad (un clic sin querer no hace daño), o si ahora no se
+  -- puede (escaneando: PostOnAH ya lo dice)
+  if n <= 1 or ES.db.noPostConfirm or (ES.Scanner and ES.Scanner:IsBusy()) then
+    ES.Ledger:PostOnAH(itemID, n, unit, hours)
+    if done then done() end
+    return
+  end
+  local d = ConfirmDialog()
+  d.pending = { itemID = itemID, n = n, unit = unit, hours = hours, done = done }
+  d.title:SetText(L["Anunciar en la Casa de Subastas"])
+  d.text:SetText(string.format(L["¿Anunciar %d × %s a %s cada uno (%d h)?"], n,
+    (ES.UI.ItemLabel(itemID, "#" .. itemID)), ES.Money(ES.Ledger.PostPrice(unit)), hours or 24))
+  d.check:SetChecked(false)
+  d.checkLabel:SetText(L["No volver a preguntar"])
+  d.note:SetText(L["Se puede volver a activar en /cj opciones (Confirmar antes de anunciar en la AH)."])
+  d.ok:SetText(L["Anunciar"])
+  d.cancel:SetText(CANCEL or L["Cancelar"])
+  d:Show()
+end
+
 local function RowClick(self, button)
   local e = self.entry
   if not e then return end
@@ -50,8 +136,7 @@ local function RowClick(self, button)
   -- es prudente: lo dudoso, pocas y a 8 h), como en la pestaña Inventario.
   -- Mayús+clic: una sola, para probar el precio (como Mayús en las bolsas: una parte)
   local n = (IsShiftKeyDown and IsShiftKeyDown()) and 1 or e.ahN
-  ES.Ledger:PostOnAH(e.itemID, n, e.listPrice, e.hours)
-  C_Timer.After(0.6, function() Sell:Refresh() end)
+  Sell.Post(e.itemID, n, e.listPrice, e.hours, function() C_Timer.After(0.6, function() Sell:Refresh() end) end)
 end
 
 local function RowEnter(self)
@@ -96,8 +181,12 @@ local function CreatePanel(parent)
     -- (cerrada, no vuelve a salir hasta /reload o hasta abrir otra vez la AH)
     Sell.closed = true
     f:Hide()
-    PlaceShopping()
+    -- La lista de compra pasa a pegarse a la AH (sin hueco). Era PlaceShopping(), una
+    -- local declarada más abajo: aquí era un global nil, daba error y no se movía
+    if ES.PlaceShoppingMini then ES:PlaceShoppingMini() end
   end)
+  f.closeButton = close
+  ES:OptionsGear(f, close) -- (abre las opciones, donde se quita esta ventana)
   f.sub = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   f.sub:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -3)
   f.sub:SetWidth(WIDTH - 24)
@@ -155,7 +244,7 @@ function Sell:Refresh()
   self:HookPanels()
   local ah = AHFrame()
   local main = CraftersJournalMainFrame
-  if not (ah and ES:IsAuctionHouseOpen()) or self.closed or (main and main:IsShown()) or not ES:AuctionWindowsOn() then
+  if not (ah and ES:IsAuctionHouseOpen()) or self.closed or (main and main:IsShown()) or not ES:AuctionSellWindowOn() then
     if panel then panel:Hide() end
     PlaceShopping()
     return
@@ -212,6 +301,7 @@ function Sell:Refresh()
   y = y - 4 - math.max(14, math.min(tonumber(panel.hint:GetStringHeight()) or 0, 70))
   panel:SetHeight(-y + 10)
   panel:Show()
+  ES:WindowTip("sell") -- (la primera vez: se puede quitar en /cj opciones)
   PlaceShopping() -- (la lista de compra, a la derecha de esta)
 end
 
@@ -226,6 +316,7 @@ do
     if event == "AUCTION_HOUSE_CLOSED" then
       Sell.closed = nil
       if panel then panel:Hide() end
+      if confirm then confirm.pending = nil confirm:Hide() end -- (sin AH no se puede anunciar)
       return
     end
     if event == "AUCTION_HOUSE_SHOW" then Sell.closed = nil end

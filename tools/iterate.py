@@ -417,6 +417,31 @@ step("H. escaneo con API moderna", function()
       "leer el escaneo de otro addon escribió en el chat: %s", PRINTS[i])
   end
   log("      siguiendo a otro addon: %d subastas, sin pedir otro escaneo", followed and followed.total or 0)
+  -- Opción "Leer los escaneos de otros addons" desactivada: no se lee, pero la barrera sí
+  NOW = NOW + 3600
+  CraftersJournalDB.scans[ES:RealmKey()] = nil
+  CraftersJournalDB.noForeignScans = true
+  C_AuctionHouse.ReplicateItems()
+  check(not ES.Scanner:IsBusy(), "con la opción desactivada siguió el escaneo de otro addon")
+  check(ES.Scanner:SecondsUntilNextScan() > 0, "con la opción desactivada no anotó la barrera de 15 min")
+  RunTimers()
+  check(CraftersJournalDB.scans[ES:RealmKey()] == nil, "con la opción desactivada guardó el escaneo de otro addon")
+  CraftersJournalDB.noForeignScans = nil
+  log("      opción desactivada: no lee el escaneo de otro addon, la barrera sí cuenta")
+  -- Guardando (resumen por tandas, Scanner:Finish): cerrar la AH no lo cancela
+  NOW = NOW + 3600
+  local realFinish = ES.Scanner.Finish
+  ES.Scanner.Finish = function(self, ...)
+    realFinish(self, ...)
+    if self.state == "saving" then FireEvent("AUCTION_HOUSE_CLOSED") self:Abort("cerrada") end
+  end
+  C_AuctionHouse.ReplicateItems()
+  RunTimers()
+  ES.Scanner.Finish = realFinish
+  local saved2 = CraftersJournalDB.scans[ES:RealmKey()]
+  check(saved2 and saved2.total == #AUCTIONS and not ES.Scanner:IsBusy(), "cerrar la AH mientras se guardaba perdió el escaneo")
+  FireEvent("AUCTION_HOUSE_SHOW")
+  RunTimers()
   -- Con la AH cerrada no se sigue (no es para ti): solo cuenta la barrera
   NOW = NOW + 3600
   CraftersJournalDB.scans[ES:RealmKey()] = nil

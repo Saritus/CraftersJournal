@@ -14,3 +14,6 @@ ignore:
   - .github
   - "*.py"
   - "*.md"
+  # Herramientas del desarrollador (/cj whatsnew): solo en su copia. Su línea del .toc
+  # va dentro de #@do-not-package@, que el empaquetador quita
+  - DevTools.lua
