@@ -18,8 +18,10 @@ local L = ES.L
 -- Lo nuevo de cada versión, de la más nueva a la más antigua. `items`: { icon, title, text }
 ES.WHATS_NEW = {
   {
-    version = "0.48.0",
+    version = "0.55.0",
     items = {
+      { icon = "Interface\\Icons\\INV_Misc_Book_09", title = "Ahora en alemán y francés",
+        text = "Textos, recetas y objetos en alemán y francés, con los nombres del juego. Se cambia con el selector de idioma de arriba. Si ves una traducción mejorable, dínoslo en Discord." },
       { icon = "Interface\\Icons\\INV_Misc_Gear_01", title = "Cada ventana, con su propia opción",
         text = "Las ventanas que salen solas junto al vendedor, la Casa de Subastas y la profesión tienen un engranaje que abre las opciones. La lista de compra y la de vender en la AH ya se quitan por separado." },
       { icon = "Interface\\Icons\\INV_Misc_Coin_01", title = "Confirmar antes de anunciar",

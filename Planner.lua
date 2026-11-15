@@ -422,7 +422,14 @@ end
 -- (Ledger:ReadTrainer, CraftersJournalDB.trainerFees) manda sobre los datos
 function Planner.Fee(recipe)
   local seen = recipe.id and ES.db and ES.db.trainerFees and ES.db.trainerFees[recipe.id]
-  if seen then return seen.cost, seen.skill or recipe.train end
+  if seen then
+    -- El nivel leído del instructor nunca por debajo del de los datos del juego: uno
+    -- más bajo es una lectura equivocada (Smelt Gold tomado por Transmute: Iron to
+    -- Gold, 155 en vez de 225; ver Ledger, ServiceRecipe)
+    local skill = seen.skill or recipe.train
+    if skill and recipe.train and skill < recipe.train then skill = recipe.train end
+    return seen.cost, skill
+  end
   return recipe.fee, recipe.train
 end
 local Fee = Planner.Fee

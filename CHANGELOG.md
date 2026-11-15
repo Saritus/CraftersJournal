@@ -1,5 +1,17 @@
 # Crafter's Journal
 
+## 0.55.0
+
+- **Now in German and French.** All texts, plus recipe and item names taken from the game itself. Pick the language with the selector at the top; German and French clients start in their own language. It's a first translation: if something reads oddly, tell us on Discord.
+- **What's New window.** After an update, a window shows once what changed in that version. It doesn't show on a fresh install.
+- **Routes no longer rely on cooldown recipes.** Transmutes (except Elemental Fire) and Mooncloth have cooldowns, but a route could ask for 186 Transmute: Iron to Gold in a row. Now they count for one skill point at most, and only while orange.
+- **Transmute: Iron to Gold is no longer learned at 155.** Opening a Mining trainer made the addon read "Smelt Gold" (Mining 155) as Transmute: Iron to Gold, because both make Gold Bars, so routes learned it at 155 instead of 225. Fixed, and the wrong data is cleaned up on its own.
+- **Each window has its own option, and a gear button.** The AH sell window can now be turned off separately from the AH shopping list. The windows that open on their own (vendor, AH, profession) have a gear button that opens the options, and the first time each one shows, the chat says it can be turned off.
+- **Confirm before listing several units.** Listing more than one unit at once (sell window, Inventory, route) now asks first how many and at what price, so a stray click doesn't list a whole stack. Tick "Don't ask again" to turn it off; it can be turned back on in the options.
+- **No more freeze at the end of an AH scan.** When a scan finishes (yours or another addon's, like Auctionator), prices are now saved bit by bit instead of all at once. New option to stop reading other addons' scans (on by default).
+- **The AH shopping list no longer leaves a gap.** Closing the AH sell window gave an error and left the shopping list where it was; it now moves next to the AH.
+- **Two errors fixed:** the Shopping list tab glow (it never glowed and showed a Lua error) and gold amounts that could be negative.
+
 ## 0.47.0
 
 - **The vendor window only offers materials from routes you started.** With no route started, it used to offer what the route of the last profession you looked at would need (for example, 200 Weak Flux), even with your Shopping list empty. Now it only shows what your started routes and your Shopping list ask for. You can also turn the window off: Esc → Options → AddOns → Crafter's Journal (or /cj options) → "Window next to vendors".

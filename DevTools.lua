@@ -6,7 +6,7 @@ local _, ES = ...
 -- tools/package.py lo dejan fuera del zip. Los jugadores no tienen estos comandos.
 --
 --   /cj whatsnew            todas las novedades (como mucho 3), sin contar como vistas
---   /cj whatsnew 0.48.0     solo las de esa versión
+--   /cj whatsnew 0.55.0     solo las de esa versión
 ---------------------------------------------------------------------------
 
 -- Lo llama el comando /cj (Core.lua) antes que los suyos. Devuelve true si era de aquí

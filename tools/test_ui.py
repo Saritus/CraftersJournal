@@ -19,6 +19,7 @@ function FireEvent(e, ...)
     if f._scripts.OnEvent then f._scripts.OnEvent(f, e, ...) end
   end
 end
+MOCK_METHODS = {} -- métodos de marcos que el addon ha llamado sin simulación propia
 bit = bit or { band = function(a, b) local r, p = 0, 1 while a > 0 and b > 0 do if a % 2 == 1 and b % 2 == 1 then r = r + p end a, b, p = math.floor(a / 2), math.floor(b / 2), p * 2 end return r end }
 local function Mock(name)
   local m = { _scripts = {}, _name = name }
@@ -46,6 +47,7 @@ local function Mock(name)
     if k == "SetChecked" then return function(self, v) self._checked = v and true or false end end
     -- Como en WoW: solo los métodos (con mayúscula) existen; los campos propios no
     if type(k) ~= "string" or not k:match("^%u") then return nil end
+    MOCK_METHODS[k] = true -- (al final se comparan con la API real: WIDGET_API)
     return function() return Mock(k) end
   end })
 end
@@ -1060,6 +1062,51 @@ step("botón del minimapa con LibDBIcon", function()
   assert(not ES.db.minimap.hide, "/cj minimap lo vuelve a enseñar")
   -- Volver a crearlo (otra carga) no lo registra dos veces
   ES.CreateMinimapButton()
+end)
+step("alemán y francés: completos, con el mismo formato y nombres del juego", function()
+  local function Tokens(s)
+    local t = {}
+    for tok in s:gmatch("%%[-+ #0]*%d*%.?%d*[dsfxXq%%]") do t[#t + 1] = tok end
+    for tok in s:gmatch("|c%x%x%x%x%x%x%x%x") do t[#t + 1] = "c" end
+    for _ in s:gmatch("|r") do t[#t + 1] = "r" end
+    for _ in s:gmatch("|T") do t[#t + 1] = "T" end
+    return table.concat(t, " ")
+  end
+  for _, lang in ipairs({ "de", "fr" }) do
+    local loc = ES.Locales[lang]
+    assert(loc, "falta ES.Locales." .. lang)
+    local missing, extra, bad = {}, {}, {}
+    for key, en in pairs(ES.Locales.en) do
+      local v = loc[key]
+      if not v then missing[#missing + 1] = key
+      elseif Tokens(v) ~= Tokens(en) then bad[#bad + 1] = key .. " -> " .. v end
+    end
+    for key in pairs(loc) do if not ES.Locales.en[key] then extra[#extra + 1] = key end end
+    assert(#missing == 0, lang .. ": " .. #missing .. " sin traducir: " .. table.concat(missing, " | "):sub(1, 400))
+    assert(#extra == 0, lang .. ": " .. #extra .. " claves que el inglés no tiene: " .. table.concat(extra, " | "):sub(1, 400))
+    assert(#bad == 0, lang .. ": formato distinto del inglés: " .. table.concat(bad, " | "):sub(1, 400))
+  end
+  -- Cambiar a alemán: textos, recetas y objetos en alemán; coma decimal
+  local savedLang, savedDBLang = ES.lang, ES.db.lang
+  ES:SetLanguage("de")
+  assert(ES.L["Lista de compra"] == "Einkaufsliste", "texto en alemán")
+  assert(ES.Data.Leatherworking.recipes[2149].name == "Handgenähte Lederstiefel", "receta en alemán: " .. tostring(ES.Data.Leatherworking.recipes[2149].name))
+  assert(ES.Num(2.5) == "2,5", "coma decimal en alemán")
+  -- Un texto que el alemán no tenga sale en inglés, no en español
+  ES.Locales.en["__prueba__"] = "english"
+  assert(ES.L["__prueba__"] == "english", "sin traducción al alemán, el inglés")
+  ES.Locales.en["__prueba__"] = nil
+  ES:SetLanguage("fr")
+  assert(ES.L["Lista de compra"] == "Liste de courses", "texto en francés")
+  assert(ES.Data.Leatherworking.recipes[2149].name ~= "Handgenähte Lederstiefel", "al pasar a francés no se queda el alemán")
+  ES:SetLanguage("en")
+  assert(ES.Data.Leatherworking.recipes[2149].name == "Handstitched Leather Boots", "de vuelta al inglés, el nombre original: " .. tostring(ES.Data.Leatherworking.recipes[2149].name))
+  assert(ES.Num(2.5) == "2.5", "punto decimal en inglés")
+  -- Como estaba: idioma y textos de antes, recetas con su nombre original (inglés),
+  -- que es como las buscan las pruebas de después
+  ES.lang, ES.db.lang = savedLang, savedDBLang
+  ES.ApplyLocalization()
+  if ES.RebuildMainFrame then ES:RebuildMainFrame() end
 end)
 step("idioma inglés", function()
   -- Todas las claves L[...] del código tienen traducción al inglés
@@ -3424,12 +3471,19 @@ step("inventario: lo que daría desencantar (solo informativo)", function()
 end)
 step("novedades: una vez por versión, y en vista de desarrollo cuando quieras", function()
   local savedGet, savedSeen, savedScans, savedPage, savedDev = GetAddOnMetadata, ES.db.whatsNewSeen, ES.db.scans, ES.db.lastPage, ES.db.devTools
-  local version = "0.48.0"
+  -- (la versión de las últimas notas, para no tocar la prueba en cada versión; y otras
+  -- derivadas de ella: la anterior, un parche sin notas y una futura)
+  local latest = ES.WHATS_NEW[1].version
+  local ma, mi = latest:match("^(%d+)%.(%d+)")
+  ma, mi = tonumber(ma), tonumber(mi)
+  local previous, patch = ma .. "." .. (mi - 1) .. ".0", ma .. "." .. mi .. ".1"
+  local midway, future = ma .. "." .. mi .. ".5", ma .. "." .. (mi + 1) .. ".0"
+  local version = latest
   GetAddOnMetadata = function(_, field) if field == "Version" then return version end end
   local function Shown() local f = ES.WhatsNewFrame() return f and f._shown end
   local function Hide() local f = ES.WhatsNewFrame() if f then f:Hide() end end
   -- Comparar versiones número a número (0.10 va después de 0.9)
-  assert(ES.CompareVersions("0.48.0", "0.47.0") == 1 and ES.CompareVersions("0.9.0", "0.10.0") == -1
+  assert(ES.CompareVersions(latest, previous) == 1 and ES.CompareVersions("0.9.0", "0.10.0") == -1
     and ES.CompareVersions("1.0", "1.0.0") == 0, "comparar versiones")
   -- Instalación nueva: no sale, se apunta la versión
   ES.db.whatsNewSeen, ES.db.scans, ES.db.lastPage = nil, {}, nil
@@ -3450,23 +3504,23 @@ step("novedades: una vez por versión, y en vista de desarrollo cuando quieras",
   ES:CheckWhatsNew()
   assert(not Shown(), "con la versión ya vista, no vuelve a salir")
   -- Versión nueva sin notas: no sale, pero se apunta
-  version = "0.48.1"
+  version = patch
   ES:CheckWhatsNew()
-  assert(not Shown() and ES.db.whatsNewSeen == "0.48.1", "una versión sin notas no abre la ventana")
+  assert(not Shown() and ES.db.whatsNewSeen == patch, "una versión sin notas no abre la ventana")
   -- Saltándose versiones: desde la vista hasta la actual, nunca las aún sin publicar
-  local fake = { version = "0.49.0", items = { { title = "x", text = "y" } } }
+  local fake = { version = future, items = { { title = "x", text = "y" } } }
   table.insert(ES.WHATS_NEW, 1, fake)
-  local since = ES:WhatsNewSince("0.47.0", "0.48.5")
-  assert(#since == 1 and since[1].version == "0.48.0", "solo las publicadas y no vistas")
-  since = ES:WhatsNewSince("0.47.0", "0.49.0")
-  assert(#since == 2 and since[1].version == "0.49.0", "las dos versiones nuevas, la más nueva arriba")
+  local since = ES:WhatsNewSince(previous, midway)
+  assert(#since == 1 and since[1].version == latest, "solo las publicadas y no vistas")
+  since = ES:WhatsNewSince(previous, future)
+  assert(#since == 2 and since[1].version == future, "las dos versiones nuevas, la más nueva arriba")
   table.remove(ES.WHATS_NEW, 1)
   -- Vista de desarrollo (/cj whatsnew, DevTools.lua: en esta copia sí está): no cambia lo visto
   assert(ES.DevCommand, "en la copia de desarrollo se carga DevTools.lua")
   local savedPrint = ES.Print
   ES.Print = function() end
   local seenBefore = ES.db.whatsNewSeen
-  SlashCmdList.CRAFTERSJOURNAL("whatsnew 0.48.0")
+  SlashCmdList.CRAFTERSJOURNAL("whatsnew " .. latest)
   assert(Shown() and ES.db.whatsNewSeen == seenBefore, "la vista de desarrollo se abre y no cuenta como vista")
   assert(tostring(ES.WhatsNewFrame().devTag._text) ~= "", "la vista de desarrollo lo dice abajo")
   Hide()
@@ -4021,6 +4075,25 @@ step("instructor: aprende los precios reales", function()
   lp.lock = savedLock
   ES.IsRecipeKnown = savedKnown
   ES.lockedPlans.Leatherworking = nil
+  -- Instructor de Minería (no es una profesión del addon): "Smelt Gold" (155) fabrica
+  -- Gold Bar como Transmute: Iron to Gold (225). Discord: la ruta la aprendía a 155
+  local iron = data.recipes[11479]
+  ES.db.trainerFees = {}
+  services = { { name = "Mining", kind = "header" },
+    { name = "Smelt Gold", kind = "available", cost = 500, skill = 155, link = "|cffffffff|Hitem:3577::::::::|h[Gold Bar]|h|r" } }
+  GetTrainerServiceSkillLine = function() return "Mining" end
+  ES.Ledger:ReadTrainer()
+  assert(not ES.db.trainerFees[11479], "el instructor de minería apuntó Smelt Gold como Transmute: Iron to Gold")
+  -- Lo que ya quedó guardado mal: nunca por debajo del nivel de los datos, y se limpia
+  ES.db.trainerFees = { [11479] = { cost = 500, skill = 155, prof = "Alchemy" }, [1249633] = { cost = 135, skill = 40 } }
+  assert(ES.Planner.LearnSkill(iron, {}) == 225, "un nivel leído menor que el de los datos no debería contar: " .. tostring(ES.Planner.LearnSkill(iron, {})))
+  ES.db.trainerFeesChecked = nil
+  ES.Ledger:CleanTrainerFees()
+  assert(not ES.db.trainerFees[11479] and ES.db.trainerFees[1249633], "la limpieza debería quitar solo la lectura equivocada")
+  ES.db.trainerFees[11479] = { cost = 500, skill = 155 }
+  ES.Ledger:CleanTrainerFees()
+  assert(ES.db.trainerFees[11479], "la limpieza se hace una sola vez")
+  log[#log+1] = "     instructor de minería: Smelt Gold ya no se toma por Transmute: Iron to Gold (225, no 155)"
   acid.fee, acid.train, acid.trainer = saved[1], saved[2], saved[3]
   ES.db.trainerFees = nil
   GetNumTrainerServices, GetTrainerServiceInfo, GetTrainerServiceSkillLine, GetTrainerServiceCost = nil, nil, nil, nil
@@ -4069,6 +4142,45 @@ step("cambiar de idioma al momento (sin recargar)", function()
   ReloadUI = nil
 end)
 step("estado escaneo sin AH", function() ES.Scanner:Start() end)
+-- Los métodos de marcos que el addon ha llamado deben existir en el cliente: el
+-- simulado acepta cualquiera, y así pasó ag:SetLoopType (no existe: es SetLooping),
+-- que en el juego daba error cada vez que brillaba una pestaña. Si sale uno nuevo,
+-- compruébalo en la API del juego (warcraft.wiki.gg, Widget API) antes de añadirlo
+step("dinero: negativos, NaN e infinito no dan error", function()
+  assert(ES.Money(nil):find("—", 1, true), "sin cantidad, raya")
+  assert(ES.Money(0 / 0):find("—", 1, true), "NaN, raya")
+  assert(ES.Money(math.huge):find("—", 1, true), "infinito, raya")
+  local neg = ES.Money(-12345)
+  assert(neg:sub(1, 1) == "-" and neg:find("1"), "negativo con el signo delante: " .. neg)
+  assert(not ES.Money(12345):find("^%-"), "positivo sin signo")
+end)
+step("métodos de marcos que existen en el juego", function()
+  local REAL = {}
+  for name in ([[
+    AddDoubleLine AddLine ClearAllPoints ClearFocus CreateAnimation CreateAnimationGroup
+    CreateFontString CreateTexture EnableMouse EnableMouseWheel GetFontString GetFrameStrata
+    GetNormalTexture GetParent GetPushedTexture GetStringHeight GetVerticalScroll
+    GetVerticalScrollRange HasFocus HighlightText HookScript IsMouseOver LockHighlight Play
+    RegisterForClicks RegisterForDrag SetAllPoints SetAlpha SetAtlas SetAutoFocus SetBackdrop
+    SetBackdropBorderColor SetBackdropColor SetBlendMode SetClampedToScreen SetColorTexture
+    SetDesaturated SetDisabledTexture SetDuration SetEnabled SetFocus SetFont SetFontObject
+    SetFrameLevel SetFrameStrata SetFromAlpha SetGradient SetHeight SetHighlightTexture
+    SetHyperlink SetItemByID SetJustifyH SetJustifyV SetLooping SetMaxLetters SetMinMaxValues
+    SetMotionScriptsWhileDisabled SetMouseClickEnabled SetMovable SetNormalTexture SetNumeric
+    SetObeyStepOnDrag SetOrder SetOrientation SetOwner SetPoint SetPropagateMouseClicks
+    SetPushedTexture SetScrollChild SetShadowOffset SetSize SetSpacing SetStatusBarColor
+    SetStatusBarTexture SetTexCoord SetTextColor SetTexture SetThumbTexture SetToAlpha SetValue
+    SetValueStep SetVertexColor SetVerticalScroll SetWidth SetWordWrap StartMoving Stop
+    StopMovingOrSizing UnlockHighlight UnregisterAllEvents UpdateScrollChildRect
+    SetGradientAlpha
+  ]]):gmatch("%a+") do REAL[name] = true end
+  -- (SetGradientAlpha ya no existe en el cliente, pero solo se usa protegida con
+  -- "elseif tex.SetGradientAlpha" para clientes viejos: HomeUI.lua)
+  local unknown = {}
+  for k in pairs(MOCK_METHODS) do if not REAL[k] then unknown[#unknown + 1] = k end end
+  table.sort(unknown)
+  assert(#unknown == 0, "métodos que no están en la lista de la API del juego: " .. table.concat(unknown, ", "))
+end)
 
 return table.concat(log, "\n")
 """)
@@ -4076,8 +4188,9 @@ print(out)
 
 # Caracteres que la fuente de WoW no tiene (salen como ▯): ✕, →, ←, − (menos
 # tipográfico)... En los textos del addon, solo ASCII, Latin-1 y los de Windows-1252
-# que sí dibuja (…, comillas tipográficas, guiones largos). Los comentarios no cuentan
-ALLOWED_EXTRA = set("…’‘“”–—€")
+# que sí dibuja (…, comillas tipográficas, guiones largos y la œ de los nombres
+# franceses del juego, como "cœur"). Los comentarios no cuentan
+ALLOWED_EXTRA = set("…’‘“”–—€œŒ")
 TOKEN = re.compile(r'--\[(=*)\[.*?\]\1\]|--[^\n]*|\[(=*)\[.*?\]\2\]|"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\'', re.S)
 bad = []
 for f in sorted(ADDON.rglob("*.lua")):
