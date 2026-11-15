@@ -186,7 +186,7 @@ local function CreatePanel(parent)
     if ES.PlaceShoppingMini then ES:PlaceShoppingMini() end
   end)
   f.closeButton = close
-  ES:OptionsGear(f, close) -- (abre las opciones, donde se quita esta ventana)
+  ES:OptionsGear(f, close, "noAuctionSellWindow") -- (menú para quitar esta ventana)
   f.sub = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   f.sub:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -3)
   f.sub:SetWidth(WIDTH - 24)
@@ -320,6 +320,10 @@ do
       return
     end
     if event == "AUCTION_HOUSE_SHOW" then Sell.closed = nil end
+    -- Con la AH cerrada no hay nada que hacer: GET_ITEM_INFO_RECEIVED y los cambios de
+    -- bolsas llegan sin parar yendo por el mundo (otros addons piden objetos) y cada uno
+    -- programaba un repintado
+    if event ~= "AUCTION_HOUSE_SHOW" and not ES:IsAuctionHouseOpen() then return end
     -- (agrupado: al abrir la AH la lista de compra pequeña se coloca primero)
     if not queued then
       queued = true

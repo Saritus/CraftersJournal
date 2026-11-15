@@ -42,33 +42,53 @@ Market.LABELS = ES.Localize({
 --   points[item] = { {time, min, listings, quantity}, ... } de más antigua a más nueva
 --   stuck[item]  = { {elapsed, siguen, baratas}, ... }
 --   offers[item] = { {unit, count, n}, ... } del último escaneo
+-- Construirlo es recorrer todo el historial de la semana: con 61 escaneos (3 MB) y
+-- 56.000 subastas seguidas, ~350 ms de golpe, y crece con cada escaneo. En el juego se
+-- hace en segundo plano, repartido entre fotogramas (BUILD_BUDGET por fotograma):
+-- mientras, se usa el índice anterior (un escaneo atrás) o, recién entrado, uno vacío
+-- ("pocos datos"); al acabar se repintan las ventanas una vez. Se empieza al entrar
+-- y al acabar cada escaneo, así suele estar listo antes de que haga falta. Fuera del
+-- juego (sin debugprofilestop), de golpe.
 local cache
+local EMPTY = { stamp = "", points = {}, stuck = {}, offers = {}, empty = true }
+local BUILD_BUDGET = 3 -- ms por fotograma
+local building       -- { stamp, co } mientras se construye
+local servedStale    -- se dio un índice viejo (o vacío) mientras se construía el nuevo
+local whenReady = {} -- lo que espera al índice nuevo (Market.WhenReady)
 
-function Market:Index()
+local function Stamp()
   local history = ES.History:Entries()
   local track = ES.db.track and ES.db.track[ES:RealmKey()]
   local last = history[#history]
-  local stamp = (#history) .. ":" .. (last and last.time or 0) .. ":" .. (track and track.time or 0)
-  if cache and cache.stamp == stamp then return cache end
+  return (#history) .. ":" .. (last and last.time or 0) .. ":" .. (track and track.time or 0), history, track
+end
+
+-- `pause()` se llama cada poco: en segundo plano cede el fotograma si se pasa del presupuesto
+local function Build(stamp, history, track, pause)
   local now = time()
-  cache = { stamp = stamp, points = {}, stuck = {}, offers = {} }
+  local idx = { stamp = stamp, points = {}, stuck = {}, offers = {} }
+  local n = 0
   for _, entry in ipairs(history) do
     if now - entry.time < WINDOW then
       if entry.snap then
         for id, m, l, q in entry.snap:gmatch(";(%d+):(%d+):(%d+):?%d*:?(%d*)") do
           id = tonumber(id)
-          local list = cache.points[id]
-          if not list then list = {} cache.points[id] = list end
+          local list = idx.points[id]
+          if not list then list = {} idx.points[id] = list end
           list[#list + 1] = { time = entry.time, min = tonumber(m), listings = tonumber(l), quantity = tonumber(q) }
+          n = n + 1
+          if n % 256 == 0 then pause() end
         end
       end
       -- Comparaciones de al menos 15 min (antes 1 h: con escaneos seguidos se tiraban casi todas)
       if entry.stuck and entry.elapsed and entry.elapsed >= 15 * 60 then
         for id, r, t in entry.stuck:gmatch(";(%d+):(%d+):(%d+)") do
           id = tonumber(id)
-          local list = cache.stuck[id]
-          if not list then list = {} cache.stuck[id] = list end
+          local list = idx.stuck[id]
+          if not list then list = {} idx.stuck[id] = list end
           list[#list + 1] = { entry.elapsed, tonumber(r), tonumber(t) }
+          n = n + 1
+          if n % 256 == 0 then pause() end
         end
       end
     end
@@ -77,13 +97,88 @@ function Market:Index()
     local id, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
     id, count, buyout = tonumber(id), tonumber(count), tonumber(buyout)
     if buyout > 0 and count > 0 then
-      local _, n = ES.History.Unpack(packed)
-      local list = cache.offers[id]
-      if not list then list = {} cache.offers[id] = list end
-      list[#list + 1] = { buyout / count, count, n }
+      local _, k = ES.History.Unpack(packed)
+      local list = idx.offers[id]
+      if not list then list = {} idx.offers[id] = list end
+      list[#list + 1] = { buyout / count, count, k }
     end
+    n = n + 1
+    if n % 256 == 0 then pause() end
   end
-  return cache
+  return idx
+end
+
+-- Listo el índice nuevo: lo que lo esperaba (el final de un escaneo) o, si alguien
+-- usó el viejo entretanto, se repintan las ventanas con el nuevo
+local function Ready()
+  local waiting = whenReady
+  whenReady = {}
+  local stale = servedStale
+  servedStale = nil
+  for _, fn in ipairs(waiting) do pcall(fn) end
+  if #waiting == 0 and stale and ES.RefreshAllViews then pcall(ES.RefreshAllViews, ES) end
+end
+
+local Step
+function Step()
+  local b = building
+  if not b then return end
+  local start = debugprofilestop()
+  local ok, res = coroutine.resume(b.co, start)
+  if not ok then
+    building = nil
+    if geterrorhandler then geterrorhandler()(res) end
+    Ready()
+    return
+  end
+  if coroutine.status(b.co) == "dead" then
+    building = nil
+    -- (si mientras tanto llegó otro escaneo, este ya es viejo: se hace el nuevo)
+    if Stamp() == res.stamp then cache = res Ready() else Market:Index() end
+    return
+  end
+  C_Timer.After(0, Step)
+end
+
+local function StartBuild(stamp, history, track)
+  if building and building.stamp == stamp then return end
+  local frameStart
+  building = { stamp = stamp }
+  building.co = coroutine.create(function(start)
+    frameStart = start
+    return Build(stamp, history, track, function()
+      if debugprofilestop() - frameStart > BUILD_BUDGET then frameStart = coroutine.yield() end
+    end)
+  end)
+  C_Timer.After(0, Step)
+end
+
+function Market:Index()
+  local stamp, history, track = Stamp()
+  if cache and cache.stamp == stamp then return cache end
+  if not (debugprofilestop and C_Timer and coroutine) then
+    cache = Build(stamp, history, track, function() end)
+    return cache
+  end
+  StartBuild(stamp, history, track)
+  servedStale = true
+  return cache or EMPTY
+end
+
+-- ¿Se está construyendo el índice? Y `fn` cuando esté (al momento si ya lo está)
+function Market.Building() return building ~= nil end
+function Market.WhenReady(fn)
+  if building then whenReady[#whenReady + 1] = fn else fn() end
+end
+
+-- Al entrar, el índice se prepara en segundo plano (unos segundos después, para no
+-- sumarse a la carga del juego): cuando abras una ventana ya está
+do
+  local f = CreateFrame("Frame")
+  ES.SafeRegister(f, "PLAYER_LOGIN")
+  f:SetScript("OnEvent", function()
+    if C_Timer then C_Timer.After(5, function() if ES.db then Market:Index() servedStale = nil end end) end
+  end)
 end
 
 -- Las más baratas que siguen tras cada escaneo -> cuánto tardan en irse (horas).

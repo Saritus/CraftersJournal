@@ -58,6 +58,21 @@ function ES:SearchAuction(itemID, tries)
   end
 end
 
+-- Mayús+clic en un objeto del addon, como en las bolsas: con la AH abierta, lo busca
+-- en ella (su nombre en la caja de búsqueda); si no, su enlace en el chat (si estás
+-- escribiendo). Devuelve true si hizo algo (si no, el clic sigue su curso)
+function ES:ItemShiftClick(itemID)
+  if not itemID then return false end
+  if self:IsAuctionHouseOpen() then
+    self:SearchAuction(itemID)
+    return true
+  end
+  local GetInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+  local link = GetInfo and select(2, GetInfo(itemID))
+  if link and ChatEdit_InsertLink and ChatEdit_InsertLink(link) then return true end
+  return false
+end
+
 -- Franja barata: lo que cuesta como mucho esto más que el más barato. Si pides más
 -- de lo que hay ahí, otro jugador se lleva los baratos antes que tú y el resto
 -- sale mucho más caro (la AH no guarda el precio entre buscar y confirmar).

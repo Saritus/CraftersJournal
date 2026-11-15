@@ -26,6 +26,7 @@ local KIND_ICON = {
   route = "Interface\\Icons\\Trade_BlackSmithing",
   money = "Interface\\Icons\\INV_Misc_Coin_02",
   calc = "Interface\\Icons\\INV_Misc_Note_02",
+  favor = "Interface\\Icons\\INV_Misc_Coin_17", -- (pestaña Merchant's Favor)
 }
 
 function ES:CreateShoppingPage(page)
@@ -106,6 +107,8 @@ function ES:CreateShoppingPage(page)
   end
   ES.SafeRegister(page, "BAG_UPDATE_DELAYED") -- (la lista del tramo cuenta lo que llevas)
   page:SetScript("OnEvent", function(self, event)
+    -- (sin verse, nada: al abrirse se pinta entera, OnShow)
+    if not self:IsVisible() then return end
     if event == "GET_ITEM_INFO_RECEIVED" and not self.pendingItems then return end
     if self.refreshQueued then return end
     self.refreshQueued = true
@@ -124,8 +127,25 @@ local function BuildLines(st, ahOpen)
   local lines = {}
   for _, s in ipairs(st.lists) do
     local list = s.list
+    -- Quitar la lista entera: la ✕ de su fila de total (pestaña) y la de su título
+    -- (panel pequeño de la AH, que no enseña los totales: allí no había forma de
+    -- quitar una lista vieja, CurseForge). La de una ruta empezada solo se esconde
+    local remove, removeTip
+    if list.live then
+      remove = function()
+        ES.Shopping.SetRouteListHidden(list.key, true)
+        ES:Print(string.format(L["%s: quitada de la Lista de compra. Tu ruta sigue empezada; vuelve a ponerla desde la vista Materiales de la ruta."], list.title))
+        ES:RenderShopping()
+        if ES.RefreshProfessionPages then ES:RefreshProfessionPages() end
+      end
+      removeTip = L["Quitar la lista de esta ruta. La ruta sigue empezada; se vuelve a poner desde su vista Materiales."]
+    else
+      remove = function() ES.Shopping.Remove(list) ES:RenderShopping() end
+      removeTip = L["Quitar esta lista. No cambia nada de lo que has comprado."]
+    end
     -- (las listas guardadas antes llevan "(1 → 225)": la flecha no está en la fuente de WoW)
-    lines[#lines + 1] = { section = (list.title or ""):gsub(" \226\134\146 ", " - ") } -- (U+2192, la flecha)
+    lines[#lines + 1] = { section = (list.title or ""):gsub(" \226\134\146 ", " - "), -- (U+2192, la flecha)
+      onRemove = remove, removeTip = removeTip }
     for _, e in ipairs(s.items) do
       local it = e.it
       local name, texture = ES.UI.ItemLabel(it.itemID, L["Objeto "] .. it.itemID)
@@ -183,14 +203,7 @@ local function BuildLines(st, ahOpen)
       lines[#lines + 1] = { total = true, icon = KIND_ICON.route,
         title = string.format(L["%d de %d listos"], s.done, s.total), sub = sub,
         value = s.cost > 0 and Signed(s.cost) or "",
-        onSkip = function()
-          ES.Shopping.SetRouteListHidden(list.key, true)
-          ES:Print(string.format(L["%s: quitada de la Lista de compra. Tu ruta sigue empezada; vuelve a ponerla desde la vista Materiales de la ruta."], list.title))
-          ES:RenderShopping()
-          if ES.RefreshProfessionPages then ES:RefreshProfessionPages() end
-        end,
-        skipTitle = L["Quitar de la lista"],
-        skipTip = L["Quitar la lista de esta ruta. La ruta sigue empezada; se vuelve a poner desde su vista Materiales."] }
+        onSkip = remove, skipTitle = L["Quitar de la lista"], skipTip = removeTip }
     else
     lines[#lines + 1] = { total = true, icon = KIND_ICON[list.kind],
       title = string.format(L["%d de %d listos"], s.done, s.total),
@@ -198,8 +211,7 @@ local function BuildLines(st, ahOpen)
         or L["Cuenta lo que llevas en las bolsas."],
       -- (la ✕ de la fila del total quita la lista entera)
       value = s.cost > 0 and Signed(s.cost) or "",
-      onSkip = function() ES.Shopping.Remove(list) ES:RenderShopping() end,
-      skipTitle = L["Quitar de la lista"], skipTip =L["Quitar esta lista. No cambia nada de lo que has comprado."] }
+      onSkip = remove, skipTitle = L["Quitar de la lista"], skipTip = removeTip }
     end
   end
   return lines
@@ -248,8 +260,9 @@ end
 local MINI_W, MINI_H, MINI_ROW, MINI_SECTION = 300, 440, 34, 20
 local mini
 
--- Junto a la AH solo la lista para comprar con un clic: sin ✕ de quitar ni total (eso,
--- en la pestaña Lista de compra, "Ver completa"). Las filas, de lado a lado del panel
+-- Junto a la AH la lista para comprar con un clic: sin totales ni ✕ por material (eso,
+-- en la pestaña Lista de compra, "Ver completa"), pero con la ✕ de cada lista en su
+-- título. Las filas, de lado a lado del panel
 local MINI_ROW_W = MINI_W - 20
 
 local function MiniRow(parent)
@@ -278,9 +291,25 @@ local function MiniRow(parent)
   row.sub:SetJustifyH("LEFT")
   row.sub:SetWordWrap(false)
   row.sub:SetTextColor(0.75, 0.72, 0.65)
+  -- ✕ en el título de cada lista: quitarla desde aquí (line.onRemove, BuildLines)
+  row.remove = CreateFrame("Button", nil, row)
+  row.remove:SetSize(14, 14)
+  row.remove:SetPoint("RIGHT", -4, 0)
+  row.remove:SetNormalTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up")
+  row.remove:SetHighlightTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Highlight", "ADD")
+  row.remove:SetPushedTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Down")
+  row.remove:SetScript("OnClick", function() if row.line and row.line.onRemove then row.line.onRemove() end end)
+  row.remove:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:AddLine(L["Quitar de la lista"])
+    if row.line and row.line.removeTip then GameTooltip:AddLine(row.line.removeTip, 0.8, 0.8, 0.8, true) end
+    GameTooltip:Show()
+  end)
+  row.remove:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  row.remove:Hide()
   row.section = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   row.section:SetPoint("LEFT", 2, 0)
-  row.section:SetPoint("RIGHT", -2, 0)
+  row.section:SetPoint("RIGHT", row.remove, "LEFT", -4, 0)
   row.section:SetJustifyH("LEFT")
   row.section:SetWordWrap(false)
   row:SetScript("OnClick", function(self) if self.line and self.line.onClick then self.line.onClick() end end)
@@ -322,7 +351,7 @@ local function CreateMini(ahFrame)
     ES.shopMiniClosed = true
     p:Hide()
   end)
-  ES:OptionsGear(p, close) -- (abre las opciones, donde se quita esta ventana)
+  ES:OptionsGear(p, close, "noAuctionWindows") -- (menú para quitar esta ventana)
 
   p.progressText = p:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   p.progressText:SetPoint("TOPLEFT", 12, -44)
@@ -422,6 +451,7 @@ RenderMini = function(st, lines, ahOpen)
     row:ClearAllPoints()
     row:SetPoint("TOPLEFT", 0, -y)
     row.section:SetText(isSection and ("|cffffd100" .. line.section .. "|r") or "")
+    row.remove:SetShown(isSection and line.onRemove ~= nil)
     row.icon:SetShown(not isSection and line.icon ~= nil)
     if line.icon then row.icon:SetTexture(line.icon) end
     row.title:SetText(not isSection and line.title or "")

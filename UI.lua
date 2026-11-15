@@ -224,6 +224,7 @@ local function CreateMainFrame()
   ES:CreateHomePage(AddPage("home", L["Subir profesiones"]))
   ES:CreateEarnPage(AddPage("money", ""))
   ES:CreateInventoryPage(AddPage("inventory", ""))
+  ES:CreateFavorPage(AddPage("favor", ""))
   ES:CreateCalculatorPage(AddPage("calc", ""))
   ES:CreateShoppingPage(AddPage("shopping", ""))
   ES:CreatePatternsPage(AddPage("patterns", L["Colección de recetas"]))
@@ -270,6 +271,8 @@ local TABS = ES.Localize({
     desc = "Qué fabricar hoy con tus recetas porque da beneficio." },
   { key = "inventory", label = "Inventario",          icon = "Interface\\Icons\\INV_Misc_Bag_08",
     desc = "Qué vender de tus bolsas, dónde y cuánto sacas; y lo que ha subido de precio." },
+  { key = "favor",    label = "Merchant's Favor",     icon = "Interface\\Icons\\INV_Misc_Coin_17",
+    desc = "Las Waylaid Crates: con qué llenar las tuyas y qué cajas de la AH dan el Favor más barato." },
   { key = "calc",     label = "Calculadora",          icon = "Interface\\Icons\\INV_Misc_Note_02",
     desc = "Cuánto ganas con una receta, como en una hoja de cálculo: guarda varios cálculos y escribe tus precios." },
   { key = "patterns", label = "Colección de recetas", icon = "Interface\\Icons\\INV_Scroll_03",
@@ -530,13 +533,21 @@ function ES:OnScanComplete(scan, followed)
     f()
     if t then ES:ScanLog(string.format("%s: %.0f ms", label, debugprofilestop() - t)) end
   end
-  Timed("vistas", function() self:RefreshAllViews() end) -- precios nuevos: todos los apartados
-  C_Timer.After(0, function()
-    -- pergaminos de botín que te faltan, en la AH
-    Timed("recetas en la AH", function() self.Collection:AlertScan(scan) end)
+  -- El historial con este escaneo (las alertas de mercado) se prepara en segundo plano
+  -- (Market:Index, ~350 ms de golpe con una semana de escaneos): lo que depende de los
+  -- precios nuevos, al tenerlo. Así se calcula una vez y sin congelar el juego
+  local t0 = debugprofilestop and debugprofilestop()
+  self.Market:Index()
+  self.Market.WhenReady(function()
+    if t0 then ES:ScanLog(string.format("historial (en segundo plano): %.0f ms", debugprofilestop() - t0)) end
+    Timed("vistas", function() self:RefreshAllViews() end) -- precios nuevos: todos los apartados
     C_Timer.After(0, function()
-      -- ruta empezada que ahora cuesta bastante más
-      Timed("ruta empezada", function() self:AnnounceRouteDrift() end)
+      -- pergaminos de botín que te faltan, en la AH
+      Timed("recetas en la AH", function() self.Collection:AlertScan(scan) end)
+      C_Timer.After(0, function()
+        -- ruta empezada que ahora cuesta bastante más
+        Timed("ruta empezada", function() self:AnnounceRouteDrift() end)
+      end)
     end)
   end)
 end

@@ -700,7 +700,8 @@ function ES:CreateCollectionView(frame, profKey)
 
   ES.SafeRegister(frame, "GET_ITEM_INFO_RECEIVED")
   frame:SetScript("OnEvent", function(self)
-    if self.pendingItems and not self.refreshQueued then
+    -- (sin verse, nada: al abrirse se pinta entera, OnShow)
+    if self.pendingItems and not self.refreshQueued and self:IsVisible() then
       self.refreshQueued = true
       C_Timer.After(0.5, function()
         self.refreshQueued = false

@@ -10,6 +10,19 @@ local L = ES.L
 
 local MAX_SKILL = ES.MAX_SKILL
 local LOW_CHANCE_CRAFTS = 3 -- más fabricaciones por punto que esto: se avisa
+-- Tiempo de fabricar (Planner.CraftSeconds): en la fila del paso si cada fabricación
+-- es lenta (en naranja) o el paso es largo; siempre en su tooltip y en el total
+local SLOW_CRAFT = 8          -- s por fabricación: lenta (algunas de Forever tardan 30-50 s)
+local LONG_STEP = 5 * 60      -- s de un paso: largo
+
+-- "~45 s", "~13 min", "~1 h 10 min"
+local function Duration(secs)
+  secs = math.floor(secs + 0.5)
+  if secs < 60 then return string.format(L["~%d s"], secs) end
+  local mins = math.floor(secs / 60 + 0.5)
+  if mins < 60 then return string.format(L["~%d min"], mins) end
+  return string.format(L["~%d h %d min"], math.floor(mins / 60), mins % 60)
+end
 local ROW_HEIGHT, ROW_GAP, SECTION_HEIGHT = 40, 4, 24
 local LIST_WIDTH = 762
 -- Filas de cita (line.quote, ver CreateRow): comillas, texto y margen
@@ -1042,6 +1055,9 @@ local function CreateRow(parent)
       if self.onRightClick then self.onRightClick() end
       return
     end
+    -- Mayús+clic en una fila con objeto: como en el resto del juego, su nombre en la
+    -- búsqueda de la AH abierta, o su enlace en el chat (ES:ItemShiftClick)
+    if self.item and IsShiftKeyDown and IsShiftKeyDown() and ES:ItemShiftClick(self.item) then return end
     if self.onClick then
       self.onClick()
     elseif self.ahItem and ES:IsAuctionHouseOpen() then
@@ -1099,6 +1115,7 @@ end
 
 -- Botones − y + para cambiar una cantidad (line.onStep(delta); con Mayús, de 5 en 5),
 -- a la izquierda del valor. Solo se crean en las filas que los usan (lote de Ganar dinero)
+local STEP_VALUE_COL = 130 -- ancho reservado al valor (cabe "+99g 99s 99c")
 local function SetStepper(row, line)
   local onStep = line.onStep
   if not onStep then
@@ -1133,8 +1150,14 @@ local function SetStepper(row, line)
   end
   row.onStep = onStep
   s:ClearAllPoints()
-  s:SetPoint("RIGHT", row.value, "LEFT", -8, 0)
+  -- A una distancia fija del borde (la columna del valor), alineados en todas las
+  -- filas: pegados al valor bailaban según lo largo que fuera ("+1g 26s 85c" o "+16s 99c")
+  local valueW = tonumber(row.value.GetStringWidth and row.value:GetStringWidth()) or 0
+  s:SetPoint("RIGHT", row, "RIGHT", -(12 + math.max(STEP_VALUE_COL, valueW) + 8), 0)
   s:Show()
+  -- (el nombre y la línea de abajo acaban antes de los botones, sin meterse debajo)
+  row.title:SetPoint("RIGHT", s, "LEFT", -6, 0)
+  row.sub:SetPoint("RIGHT", s, "LEFT", -6, 0)
 end
 
 -- Pinta una línea en una fila y devuelve el alto que ocupa
@@ -1520,7 +1543,7 @@ function ES:CreateProfessionPage(page, profKey)
     function() return settings.fewerCrafts and true or false end,
     function() settings.fewerCrafts = not settings.fewerCrafts or nil end,
     function()
-      return { settings.fewerCrafts and L["La ruta paga un poco más a cambio de fabricar menos veces (evita recetas en verde que piden varias fabricaciones por punto)."]
+      return { settings.fewerCrafts and L["La ruta paga un poco más a cambio de fabricar menos y más rápido: evita las recetas en verde que piden varias fabricaciones por punto y las que tardan mucho en fabricarse."]
         or L["La ruta más barata, aunque pida más fabricaciones."] }
     end)
 
@@ -1602,6 +1625,8 @@ function ES:CreateProfessionPage(page, profKey)
     -- parar y tardaba 10 minutos en salir
     local waiting = self.plan.pendingItems
     if success ~= false and itemID and waiting and waiting[itemID] then self.recalcQueued = true end
+    -- (sin verse, nada más: yendo por el mundo llegan sin parar; se repinta al verse)
+    if not self:IsVisible() then return end
     if self.refreshQueued or not (self.pendingItems or self.recalcQueued) then return end
     self.refreshQueued = true
     C_Timer.After(0.5, function()
@@ -1749,10 +1774,15 @@ function ES:CheckCraftStop()
 end
 
 do
-  local f, stamp = CreateFrame("Frame"), 0
+  local f, stamp, skills = CreateFrame("Frame"), 0, nil
   for _, e in ipairs({ "SKILL_LINES_CHANGED", "CHAT_MSG_SKILL" }) do ES.SafeRegister(f, e) end
   f:SetScript("OnEvent", function()
     if not ES.db then return end
+    -- Solo si cambió el nivel o el tope de una profesión: un punto de arma o defensa
+    -- (continuos en combate) no tiene nada que hacer aquí (ES:ProfessionSkillStamp)
+    local now = ES:ProfessionSkillStamp()
+    if now == skills then return end
+    skills = now
     -- (al momento: cada fabricación de más gasta materiales; protegido: si falla, la
     -- página se refresca igual)
     local ok, err = pcall(ES.CheckCraftStop, ES)
@@ -2251,6 +2281,7 @@ local function RouteLines(plan, page)
       lines[#lines + 1] = line
     end
   end
+  local routeSecs = 0 -- lo que queda de fabricar en toda la ruta (fila del total)
   for i, st in ipairs(plan.steps) do
     while events[ev] and events[ev].skill <= st.from do AddEvent(events[ev]) ev = ev + 1 end
     -- Ruta fijada: los pasos que ya has pasado se marcan hechos (sin fila de aprender)
@@ -2435,9 +2466,28 @@ local function RouteLines(plan, page)
     end
     -- El paso en el que estás (si antes hay que aprender la receta, es esa fila)
     local current = inStep and not learnPending and not prepPending
+    -- Lo que se tarda en fabricar este paso (lo que falta, si vas por él)
+    local craftSecs = ES.Planner.CraftSeconds(st.id)
+    local stepCrafts = current and left or (st.crafts + (st.aheadCrafts or 0))
+    local stepSecs = done and 0 or craftSecs * stepCrafts
+    routeSecs = routeSecs + stepSecs
+    local timeText = ""
+    if not done and (craftSecs >= SLOW_CRAFT or stepSecs >= LONG_STEP) then
+      timeText = " · " .. (craftSecs >= SLOW_CRAFT and ORANGE or "") .. Duration(stepSecs) .. (craftSecs >= SLOW_CRAFT and "|r" or "")
+    end
     -- Clic: abre la receta y, con la opción "Fabricar al pulsar" (por defecto), fabrica lo que falta
     local craftNow = not done and left > 0 and ES:IsRecipeKnown(st.id)
-    local tooltip = RecipeTooltip(st, plan)
+    local recipeTooltip = RecipeTooltip(st, plan)
+    local function tooltip(row)
+      recipeTooltip(row)
+      if not done then
+        GameTooltip:AddLine(string.format(L["Cada fabricación: %s · este paso: %s fabricando"], Duration(craftSecs), Duration(stepSecs)),
+          craftSecs >= SLOW_CRAFT and 1 or 0.8, craftSecs >= SLOW_CRAFT and 0.6 or 0.8, craftSecs >= SLOW_CRAFT and 0.2 or 0.8, true)
+        if craftSecs >= SLOW_CRAFT then
+          GameTooltip:AddLine(L["Lenta: si prefieres otra receta, quítala con la X (o activa \"Menos fabricaciones\", que evita las lentas)."], 0.6, 0.6, 0.6, true)
+        end
+      end
+    end
     lines[#lines + 1] = {
       onClick = function()
         if not craftNow then ES:OpenRecipe(st.id) return end
@@ -2459,9 +2509,9 @@ local function RouteLines(plan, page)
         -- Lo que llevas se mide en puntos (tu nivel), no en fabricaciones de esta
         -- receta: los puntos que te dé otra (Bolt of Woolen Cloth) también cuentan
         or current and (string.format(L["%d/%d puntos · ~%s%d|r fabricaciones más · %s/u"], level - st.from, st.to - st.from,
-          GOLD, left, ES.Money(st.unitCost)) .. aheadText)
+          GOLD, left, ES.Money(st.unitCost)) .. timeText .. aheadText)
         or (string.format(L["%s%d fabricaciones|r · %s/u"], perPoint > LOW_CHANCE_CRAFTS and ORANGE or "",
-        st.crafts + (st.aheadCrafts or 0), ES.Money(st.unitCost)) .. aheadText)
+        st.crafts + (st.aheadCrafts or 0), ES.Money(st.unitCost)) .. timeText .. aheadText)
         -- La segunda mejor receta y por qué es peor (si ya está calculada)
         .. (AltSummary(plan, i, page.data) and ("  " .. AltSummary(plan, i, page.data)) or ""),
       value = Signed(st.total - st.fee), item = r.out and r.out[1], -- lo de aprender va en su fila
@@ -2545,7 +2595,9 @@ local function RouteLines(plan, page)
       end,
     }
   end
-  lines[#lines + 1] = { total = true, title = L["Total"], sub = string.format(L["Subir de %d a %d"], plan.from, plan.reached), value = Signed(plan.net) }
+  lines[#lines + 1] = { total = true, title = L["Total"], value = Signed(plan.net),
+    sub = string.format(L["Subir de %d a %d"], plan.from, plan.reached)
+      .. (routeSecs > 0 and (" · " .. string.format(L["%s fabricando"], Duration(routeSecs))) or "") }
   return lines
 end
 

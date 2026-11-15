@@ -77,25 +77,11 @@ end
 -- Es un criterio interno: no se enseña ni se ajusta (un deslizador y una cifra de
 -- oro por hora complicaban la página más de lo que ayudaban)
 ---------------------------------------------------------------------------
-local DEFAULT_CAST = 3        -- s por fabricación si el juego no dice el lanzamiento
-local MIN_CAST = 1.5          -- (las instantáneas igual esperan el tiempo global)
-local CRAFT_OVERHEAD = 0.5    -- s de más por fabricación (latencia, cola)
 Earn.VENDOR_TIME_BUDGET = 20 * 60 -- s de fabricar como mucho en una línea de vendedor
 
--- Segundos por fabricación de una receta (su lanzamiento en el juego + margen)
-function Earn.CraftSeconds(recipeID)
-  local ms
-  if C_Spell and C_Spell.GetSpellInfo then
-    local ok, info = pcall(C_Spell.GetSpellInfo, recipeID)
-    if ok and type(info) == "table" then ms = info.castTime end
-  end
-  if not ms and GetSpellInfo then
-    local ok, _, _, _, castTime = pcall(GetSpellInfo, recipeID)
-    if ok then ms = castTime end
-  end
-  local s = (type(ms) == "number" and ms > 0) and ms / 1000 or DEFAULT_CAST
-  return math.max(MIN_CAST, s) + CRAFT_OVERHEAD
-end
+-- Segundos por fabricación de una receta (su lanzamiento en el juego + margen): la
+-- misma cuenta que las rutas (Planner.CraftSeconds)
+function Earn.CraftSeconds(recipeID) return ES.Planner.CraftSeconds(recipeID) end
 
 -- Tiempo de fabricar una idea (sus fabricaciones y las de lo intermedio que haces
 -- por el camino) y el oro por hora que deja: idea.seconds, idea.gph (cobre/h)
@@ -193,7 +179,7 @@ function Earn.StepQuantity(idea, delta)
   else
     ES.db.earnQty[idea.e.itemID] = { n = wanted, scan = scanTime }
   end
-  Earn:Clear()
+  Earn:Clear(true) -- (solo las ideas: los costes de las recetas no cambian)
 end
 
 -- ¿Cabe lo comprado en la AH (en `extra`, con clave itemID) en lo que hay a la venta,
@@ -304,12 +290,74 @@ end
 -- Todas las ideas, ordenadas por puntuación. Caché por escaneo, reputación,
 -- ventas propias y día (las recetas conocidas cambian poco; se vacía en RefreshAllViews).
 local cache
-function Earn:Clear() cache = nil end
+-- Lo caro (Planner:RecipeMarket: el coste de cada receta, ~10 ms por profesión) no
+-- depende de tus bolsas: se guarda por profesión hasta otro escaneo, otra reputación,
+-- otra AH o el historial nuevo. Cambiar las bolsas (cada fabricación) solo rehace las
+-- ideas (~2 ms): antes se rehacía todo, ~20 ms por fabricación con la profesión abierta.
+-- `keepMarket`: solo las ideas (bolsas, cantidades); sin él, todo (aprendes una receta,
+-- escaneo nuevo...)
+local marketMemo = {}
+function Earn:Clear(keepMarket)
+  cache = nil
+  if not keepMarket then marketMemo = {} end
+end
+
+local function RecipeMarketFor(profKey, data, scan)
+  local key = table.concat({ scan and scan.time or 0, ES:RealmKey(), ES.repStamp or "", tostring(ES:IsNeutralAH()),
+    ES.Market:Index().stamp or "" }, ":")
+  local m = marketMemo[profKey]
+  if m and m.key == key then
+    m.ctx.used = {} -- (lo que compró el lote anterior no cuenta: se vuelve a repartir)
+    return m.entries, m.ctx
+  end
+  local entries, ctx = ES.Planner:RecipeMarket(data, {
+    hours = 24, neutral = ES:IsNeutralAH(),
+    sourcedScrolls = ES.Waypoints.SOURCED_PROFESSIONS[profKey] or nil,
+    -- Lo intermedio, solo con recetas que sabes: lo que no sepas hacer se compra hecho
+    knownProducers = true,
+  })
+  -- (si faltaba algún precio de vendedor, se guarda igual y se tira cuando el juego
+  -- mande objetos: abajo. Sin guardar, un objeto que no llegue nunca la dejaba sin caché)
+  marketMemo[profKey] = { key = key, entries = entries, ctx = ctx, pending = ctx.pendingInfo }
+  return entries, ctx
+end
+do
+  local f = CreateFrame("Frame")
+  ES.SafeRegister(f, "GET_ITEM_INFO_RECEIVED")
+  f:SetScript("OnEvent", function()
+    for profKey, m in pairs(marketMemo) do
+      if m.pending then marketMemo[profKey] = nil cache = nil end
+    end
+  end)
+end
 -- Lo que llevas cambia cuántas hay que fabricar
 do
   local f = CreateFrame("Frame")
   ES.SafeRegister(f, "BAG_UPDATE_DELAYED")
   f:SetScript("OnEvent", function() cache = nil end)
+end
+
+-- De lo que hay que comprar (Earn.Shopping), lo que ya tienes (bolsas, y lo comprado
+-- que viene por correo: lo mismo que descuenta la Lista de compra) y lo que vale:
+-- { value, items = { { itemID, n, value } } }. Solo informa de lo que pagarás de
+-- verdad: el beneficio sigue contando tus materiales a precio de la AH (venderlos es
+-- la alternativa; contarlos gratis hacía rentable gastar materiales caros en cosas
+-- que valen menos). Se calcula al pintar: las bolsas cambian y las ideas van en caché
+function Earn.FromBags(shopping)
+  local res = { value = 0, items = {} }
+  for _, n in ipairs(shopping or {}) do
+    if n.source == "ah" or n.source == "vendor" then
+      local have = (ES.HaveForShopping and ES:HaveForShopping(n.itemID)) or ES:ItemCount(n.itemID) or 0
+      local use = math.min(have, math.ceil((n.quantity or 0) - 0.001))
+      if use > 0 then
+        local v = use * (n.unit or 0)
+        res.value = res.value + v
+        res.items[#res.items + 1] = { itemID = n.itemID, n = use, value = v }
+      end
+    end
+  end
+  table.sort(res.items, function(a, b) return a.value > b.value end)
+  return res
 end
 
 -- Lo que hay que comprar (AH y vendedor) para unas ideas ya costeadas, juntando cada
@@ -383,10 +431,7 @@ function Earn:Ideas()
   for _, profKey in ipairs(res.profs) do
     local data = ES.Data[profKey]
     local rank = ES:GetProfessionSkill(data.skillLine) or 0
-    local entries, ctx = ES.Planner:RecipeMarket(data, {
-      hours = 24, neutral = ES:IsNeutralAH(),
-      sourcedScrolls = ES.Waypoints.SOURCED_PROFESSIONS[profKey] or nil,
-    })
+    local entries, ctx = RecipeMarketFor(profKey, data, scan)
     for _, e in ipairs(entries) do
       if LEARNABLE[e.learnSource] then
         Earn.AddLearnable(res, e, profKey, rank, minLine)
@@ -470,6 +515,21 @@ function Earn:Ideas()
       end
     end
   end
+  -- Orden fijo en la pantalla hasta el siguiente escaneo: el de la primera vez que sale
+  -- cada línea. Al pulsar − o + cambia su beneficio y su puesto, y la fila saltaba de
+  -- sitio: había que ir persiguiéndola (Discord). Lo de arriba (quién paga las subastas
+  -- más baratas) sigue por puntuación; esto solo ordena lo que se ve
+  local scanTime = ScanTime()
+  local order = Earn.batchOrder
+  if not order or order.scan ~= scanTime then
+    order = { scan = scanTime, rank = {}, n = 0 }
+    Earn.batchOrder = order
+  end
+  for _, idea in ipairs(res.batch) do
+    local id = idea.e.itemID
+    if not order.rank[id] then order.n = order.n + 1 order.rank[id] = order.n end
+  end
+  table.sort(res.batch, function(a, b) return order.rank[a.e.itemID] < order.rank[b.e.itemID] end)
   res.shopping = Earn.Shopping(res.batch)
 
   -- Venta al vendedor (venta segura): aparte del lote, cada línea por su cuenta con

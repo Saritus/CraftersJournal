@@ -25,7 +25,18 @@ local first = res.batch[1]
 assert(first, "sin lote con tus datos: escanea la AH")
 local name, n0, cost0 = first.e.recipe.name, first.crafts, first.invest
 out[#out+1] = string.format("%s: %d recomendadas, invierte %s", name, n0, g(cost0))
+-- El orden de las filas no cambia al pulsar − o + (antes saltaban de sitio)
+local function Order(r) local t = {} for _, i in ipairs(r.batch) do t[#t + 1] = i.e.itemID end return table.concat(t, ",") end
+local order0 = Order(res)
+local last = res.batch[#res.batch]
 ES.Earn.StepQuantity(first, 5)
+assert(Order(Ideas()) == order0, "con +5 en la primera, las filas cambian de sitio")
+if last ~= first then
+  ES.Earn.StepQuantity(Find(ES.Earn:Ideas(), last.e.recipe.name), 30)
+  assert(Order(Ideas()) == order0, "con +30 en la última, las filas cambian de sitio")
+  ES.Earn.StepQuantity(Find(ES.Earn:Ideas(), last.e.recipe.name), -30)
+end
+out[#out+1] = string.format("   orden fijo con - y + (%d filas)", #res.batch)
 local more = Find(Ideas(), name)
 assert(more and more.custom and more.crafts == n0 + 5 and more.recommended == n0, "+5 no aplicó la cantidad")
 assert(more.invest > cost0, "con más fabricaciones no sube lo que inviertes")
@@ -55,6 +66,64 @@ ES.CraftRecipe = savedCraft
 local now = Find(ES.Earn:Ideas(), name)
 assert(crafted and crafted[1] == now.e.id and crafted[2] == now.crafts, "el clic no fabrica la receta de la fila")
 out[#out+1] = string.format("   clic: fabrica %d de la receta %d", crafted[2], crafted[1])
+-- Materiales en las bolsas: la cabecera dice cuánto ya tienes y cuánto pagas; el
+-- beneficio no cambia (tus materiales cuentan a precio de la AH)
+do
+  local r0 = ES.Earn:Ideas()
+  local mat = r0.shopping[1]
+  assert(mat, "el lote no tiene materiales que comprar")
+  local savedHave = ES.HaveForShopping
+  ES.HaveForShopping = function(_, id) return id == mat.itemID and 5 or 0 end
+  ES:RenderEarn()
+  local text = tostring(page.investBags._text)
+  local bags = page.bags
+  local want = math.min(5, math.ceil(mat.quantity - 0.001)) * mat.unit
+  assert(bags and math.abs(bags.value - want) < 1, string.format("lo que ya tienes: %s, esperado %s", tostring(bags and bags.value), want))
+  assert(text:find("pagas") or text:find("you pay"), "la cabecera no dice lo que pagas: " .. text)
+  assert(ES.Earn:Ideas().profit == r0.profit, "el beneficio cambió con los materiales de las bolsas")
+  -- (los tooltips de la cabecera y de las filas del lote, sin errores)
+  local lines = {}
+  local savedAD = GameTooltip.AddDoubleLine
+  GameTooltip.AddDoubleLine = function(_, a) lines[#lines + 1] = tostring(a) end
+  page.investHover._scripts.OnEnter(page.investHover)
+  for _, r in ipairs(page.rows) do if r.onStep and r.tooltip then r.tooltip(r) end end
+  GameTooltip.AddDoubleLine = savedAD
+  local joined = table.concat(lines, "|")
+  assert(joined:find("pagas") or joined:find("you pay"), "el tooltip de la fila no dice lo que pagas: " .. joined)
+  ES.HaveForShopping = function() return 0 end
+  ES:RenderEarn()
+  assert(tostring(page.investBags._text) == "", "sin nada en las bolsas, la línea sigue: " .. tostring(page.investBags._text))
+  ES.HaveForShopping = savedHave
+  out[#out+1] = string.format("   bolsas: 5 de %d -> ya tienes %s, el beneficio no cambia", mat.itemID, g(want))
+end
+-- Botones − y + alineados en todas las filas (a la misma distancia del borde)
+do
+  local xs = {}
+  for _, r in ipairs(page.rows) do
+    if r.stepper then r.stepper.SetPoint = function(s, _, _, _, x) s.x = x end end
+  end
+  ES:RenderEarn()
+  for _, r in ipairs(page.rows) do
+    if r.stepper and r.stepper._shown ~= false and r.onStep then xs[#xs + 1] = tostring(r.stepper.x) end
+  end
+  for i = 2, #xs do assert(xs[i] == xs[1], "los botones - y + no están alineados: " .. table.concat(xs, ", ")) end
+  out[#out+1] = string.format("   botones - y + alineados en %d filas (x %s)", #xs, tostring(xs[1]))
+end
+-- Mayús+clic en una fila: con la AH abierta, la busca en la AH (no fabrica)
+do
+  local savedShift, savedOpen, savedSearch, savedCraft = IsShiftKeyDown, ES.IsAuctionHouseOpen, ES.SearchAuction, ES.CraftRecipe
+  local searched, crafted2
+  IsShiftKeyDown = function() return true end
+  ES.IsAuctionHouseOpen = function() return true end
+  ES.SearchAuction = function(_, id) searched = id end
+  ES.CraftRecipe = function() crafted2 = true end
+  for _, r in ipairs(page.rows) do
+    if r.onStep and r.item then r._scripts.OnClick(r, "LeftButton") break end
+  end
+  assert(searched and not crafted2, "Mayús+clic no buscó el objeto en la AH")
+  IsShiftKeyDown, ES.IsAuctionHouseOpen, ES.SearchAuction, ES.CraftRecipe = savedShift, savedOpen, savedSearch, savedCraft
+  out[#out+1] = "   Mayús+clic con la AH abierta: lo busca en la AH"
+end
 -- Ventana junto a la profesión: al abrir Sastrería, sus líneas de Ganar dinero; clic = fabricar
 do
   local savedPF, savedT, savedCraft = ProfessionsFrame, C_TradeSkillUI, ES.CraftRecipe

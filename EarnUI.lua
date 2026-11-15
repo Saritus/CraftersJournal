@@ -64,9 +64,35 @@ local function IdeaTooltip(idea)
         GameTooltip:AddLine(string.format(L["Hasta aquí: unos %d min de fabricar. Más fabricaciones aún darían beneficio, pero no compensa el tiempo."],
           math.floor(ES.Earn.VENDOR_TIME_BUDGET / 60)), 0.8, 0.8, 0.8, true)
       end
+      -- Lo intermedio que fabricas tú (de lo que compras): hay que hacerlo antes. Si
+      -- no, la lista de compra pedía Heavy Stone sin decir que es para hacer el Heavy
+      -- Blasting Powder que pide la receta (CurseForge)
+      local first = {}
+      for _, a in ipairs(idea.actions or {}) do
+        if a.kind == "craft" and a.item ~= e.itemID and (a.qty or 0) > 0 then
+          first[#first + 1] = string.format("%d× %s", math.ceil(a.qty - 0.001), (ItemLabel(a.item, "#" .. a.item)))
+        end
+      end
+      if #first > 0 and idea.crafts > 0 then
+        GameTooltip:AddLine(string.format(L["Antes, fabrica tú: %s (la lista de compra pide sus materiales)."], table.concat(first, ", ")),
+          1, 0.82, 0, true)
+      end
       if idea.crafts > 0 then
         GameTooltip:AddDoubleLine(L["Inviertes"], ES.Money(idea.invest), unpack(W))
+        -- De eso, lo que ya llevas: no lo pagas, pero cuenta a precio de la AH
+        local bags = ES.Earn.FromBags(ES.Earn.Shopping({ idea }))
+        if bags.value > 0 then
+          GameTooltip:AddDoubleLine(L["  ya lo tienes"], ES.Money(bags.value), 0.6, 1, 0.6, 0.6, 1, 0.6)
+          for i, it in ipairs(bags.items) do
+            if i > 4 then break end
+            GameTooltip:AddDoubleLine(string.format("    %d× %s", it.n, (ItemLabel(it.itemID, "#" .. it.itemID))), ES.Money(it.value), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
+          end
+          GameTooltip:AddDoubleLine(L["  pagas"], ES.Money(math.max(0, idea.invest - bags.value)), unpack(W))
+        end
         GameTooltip:AddDoubleLine(L["Beneficio si se venden todas"], GREEN .. "+" .. ES.Money(idea.profit) .. "|r", unpack(W))
+        if bags.value > 0 then
+          GameTooltip:AddLine(L["Tus materiales cuentan a lo que valen en la AH: venderlos es la otra opción."], 0.6, 0.6, 0.6, true)
+        end
       end
       if idea.sellWhere == "ah" then
         GameTooltip:AddLine(string.format(e.fair and e.fair.inflated and L["Anúncialos a %s (el precio de los últimos días, algo por encima)."]
@@ -275,6 +301,32 @@ function ES:CreateEarnPage(page)
     value:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -3)
     page.stats[s.key] = value
   end
+  -- Debajo de lo que inviertes: lo que ya llevas y lo que pagas (Earn.FromBags). Con el
+  -- ratón, qué materiales son
+  page.investBags = Label(strip, "", "GameFontDisableSmall")
+  page.investBags:SetPoint("TOPLEFT", page.stats.invest, "BOTTOMLEFT", 0, -1)
+  page.investBags:SetWidth(188) -- (su columna: no se mete en la de Beneficio)
+  page.investBags:SetJustifyH("LEFT")
+  page.investBags:SetWordWrap(false)
+  page.investHover = CreateFrame("Frame", nil, strip)
+  page.investHover:SetPoint("TOPLEFT", page.stats.invest, "TOPLEFT", 0, 0)
+  page.investHover:SetPoint("BOTTOMLEFT", page.investBags, "BOTTOMLEFT", 0, 0)
+  page.investHover:SetWidth(188)
+  page.investHover:EnableMouse(true)
+  page.investHover:SetScript("OnEnter", function(self)
+    local bags = page.bags
+    if not (bags and bags.value > 0) then return end
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+    GameTooltip:AddLine(L["Ya tienes parte de los materiales"], 1, 0.82, 0)
+    for i, it in ipairs(bags.items) do
+      if i > 10 then break end
+      GameTooltip:AddDoubleLine(string.format("%d× %s", it.n, (ItemLabel(it.itemID, "#" .. it.itemID))), ES.Money(it.value), 1, 1, 1, 1, 1, 1)
+    end
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine(L["No los pagas, pero el beneficio los cuenta a lo que valen en la AH: venderlos es la otra opción. Contarlos gratis haría parecer rentable gastar materiales caros en cosas que valen menos."], 0.8, 0.8, 0.8, true)
+    GameTooltip:Show()
+  end)
+  page.investHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
   page.status = Label(page, "", "GameFontHighlightSmall")
   page.status:SetPoint("TOPLEFT", strip, "BOTTOMLEFT", 2, -2)
   page.status:SetPoint("RIGHT", strip, "RIGHT", 0, 0)
@@ -295,7 +347,8 @@ function ES:CreateEarnPage(page)
 
   ES.SafeRegister(page, "GET_ITEM_INFO_RECEIVED")
   page:SetScript("OnEvent", function(self)
-    if self.pendingItems and not self.refreshQueued then
+    -- (sin verse, nada: al abrirse se pinta entera, OnShow)
+    if self.pendingItems and not self.refreshQueued and self:IsVisible() then
       self.refreshQueued = true
       C_Timer.After(0.5, function()
         self.refreshQueued = false
@@ -344,6 +397,14 @@ function ES:RenderEarn()
   local Signed = ES.UI.Signed
 
   page.stats.invest:SetText(#res.batch > 0 and Signed(res.invest) or (GREY .. "—|r"))
+  -- (al pintar, no en la caché de ideas: tus bolsas cambian sin que cambien los precios)
+  page.bags = #res.batch > 0 and ES.Earn.FromBags(res.shopping) or nil
+  if page.bags and page.bags.value > 0 then
+    page.investBags:SetText(string.format(L["ya tienes %s · pagas %s"], ES.Money(page.bags.value),
+      ES.Money(math.max(0, res.invest - page.bags.value))))
+  else
+    page.investBags:SetText("")
+  end
   page.stats.profit:SetText(#res.batch > 0 and Signed(-res.profit) or (GREY .. "—|r"))
   page.stats.count:SetText(tostring(#res.batch))
   page.addButton:SetEnabled(#res.shopping > 0)

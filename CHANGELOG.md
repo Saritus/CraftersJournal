@@ -1,5 +1,27 @@
 # Crafter's Journal
 
+## 0.56.0
+
+- **Routes show how long crafting takes.** Some Forever recipes take 30-50 seconds per craft. A route step now shows its crafting time when each craft is slow (in orange) or the step is long, and its tooltip gives the time per craft and for the whole step. The route's Total row says how long the whole route takes to craft. If a step is too slow for you, remove it with its X and the route picks another recipe.
+- **"Fewer crafts" also avoids slow recipes.** With the pocket-watch button on, each craft now weighs as much as it takes: a 50-second craft counts like 14 normal ones, so the route prefers faster recipes even if they cost a bit more. With the button off, the route stays the cheapest, as before.
+- **New Merchant's Favor tab.** The cheapest way to earn Merchant's Favor with Waylaid Crates, using your AH scan:
+  - **Your crates:** for each crate in your bags, the cheapest bundle to fill it with, and whether you already have it.
+  - **Crates on the AH:** every crate sorted by what each point of Favor costs (crate + bundle). Bundles you can craft with recipes you know (Bolt of Linen Cloth, Cured Light Hide...) are priced both ways.
+  - **Shopping list:** click a row to add the crate and its bundle.
+  - The top of the tab shows your Merchant's Favor. The crates and their bundles come from the game itself. Artisan crates' Favor (~20 / ~40) is an estimate, because no guide lists it yet.
+- **Remove a shopping list right from the AH.** In the small shopping list next to the Auction House, each list's title now has an ✕ that removes it, so old calculations don't pile up. Before, you could only remove lists from the Shopping list tab. A started route's list is only hidden and your route keeps going, as in the tab.
+- **Performance: no more freezes, and less CPU out in the world.**
+  - **No freeze after a scan or after login.** The market history behind "good / watch / avoid" (a week of scans) took about 0.35 s to read, all at once, the first time it was needed and again after every scan. It's now prepared in the background over a couple of seconds, without stopping the game. Windows keep using the previous one meanwhile and refresh once when it's ready.
+  - **Crafting with the profession window open is smooth.** Each craft changes your bags, and Make Money recalculated every recipe's cost (about 20 ms per craft). Recipe costs are now kept until the next scan, and a bag change only redoes the light part (about 2 ms).
+  - **Less CPU while questing.** Every weapon or defense skill-up (constant in combat) made the addon re-read all your professions and recheck your started routes. Now it only does that when a profession's skill or cap actually changes.
+  - **Closed windows stay asleep.** The AH sell window, the window next to your profession and the addon's own pages no longer wake up on every looted item or item lookup from other addons while they're closed.
+  - **Other addons' errors.** Lua errors from other addons are no longer inspected again each time they repeat. An addon throwing the same error every frame made Crafter's Journal look busy.
+- **Make Money only crafts intermediates with recipes you know.** For Heavy Dynamite, its shopping list asked for Heavy Stone to make the Heavy Blasting Powder yourself, even if you didn't know that recipe. Make Money now buys an intermediate ready-made unless you can craft it. When you can and it's cheaper, the row's tooltip now says to craft it first (for example, "Craft these first: 684× Heavy Blasting Powder").
+- **The gear on the windows next to the vendor, the AH and your profession opens a small menu.** It has "Don't show this window" (the same as unticking it in the options; it closes right away and you can turn it back on in /cj options) and "All options". Before, the gear opened the full options panel and you had to find the right checkbox.
+- **Make Money: rows stay in place when you change quantities.** In Today's batch, pressing - or + changed a row's profit and moved it to another position, so you had to chase it. Now the order stays the same until the next scan, and the - and + buttons line up on every row.
+- **Make Money shows what you'll actually pay.** Under "You invest in materials", a line says how much of it is already in your bags and how much you still pay (hover it to see which materials). Each row's tooltip says the same. The profit still counts your materials at their AH value, because selling them is the alternative: counting them as free would make it look profitable to turn expensive materials into things worth less.
+- **Shift-click an item in the addon to search for it on the AH.** As in your bags: with the Auction House open, shift-clicking a row's item searches for it; with the chat open, it links it.
+
 ## 0.55.0
 
 - **Now in German and French.** All texts, plus recipe and item names taken from the game itself. Pick the language with the selector at the top; German and French clients start in their own language. It's a first translation: if something reads oddly, tell us on Discord.

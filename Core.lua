@@ -485,6 +485,8 @@ function ES:RefreshAllViews()
   if self.RefreshPatternPages then self:RefreshPatternPages() end -- Colección de recetas
   if self.RenderCalculator then self:RenderCalculator() end    -- Calculadora (sus precios salen del escaneo)
   if self.RenderShopping then self:RenderShopping() end        -- Lista de compra
+  if self.Favor then self.Favor.Clear() end                     -- Merchant's Favor (precios de cajas y paquetes)
+  if self.RenderFavor then self:RenderFavor() end
   if self.AuctionSell and self.AuctionSell.Refresh then self.AuctionSell:Refresh() end -- ventana de vender junto a la AH
 end
 
@@ -625,12 +627,23 @@ do
   -- de errores se carga después y pone el suyo, al entrar al mundo se vuelve a
   -- enganchar delante (busy: por si los dos se llaman entre sí)
   local previous, busy
+  -- Errores ya vistos que no son de este addon: no se vuelven a mirar. Un addon que da
+  -- el mismo error en cada fotograma (yendo montado, por ejemplo) hacía que aquí se
+  -- sacara la pila (debugstack, caro) sin parar, y ese tiempo se apuntaba a este
+  -- addon (CurseForge: "CPU alta yendo montado")
+  local notOurs, notOursN = {}, 0
   local function Handler(msg, ...)
     if busy then return end -- (el otro manejador nos ha vuelto a llamar: se corta aquí)
     busy = true
-    local stack = debugstack and debugstack(2) or ""
-    if tostring(msg):find(ADDON_NAME, 1, true) or stack:find(ADDON_NAME, 1, true) then
-      pcall(ES.RecordError, ES, "lua", msg, stack)
+    local text = tostring(msg)
+    if not notOurs[text] then
+      local stack = debugstack and debugstack(2) or ""
+      if text:find(ADDON_NAME, 1, true) or stack:find(ADDON_NAME, 1, true) then
+        pcall(ES.RecordError, ES, "lua", msg, stack)
+      else
+        if notOursN >= 200 then notOurs, notOursN = {}, 0 end
+        notOurs[text], notOursN = true, notOursN + 1
+      end
     end
     if previous then pcall(previous, msg, ...) end
     busy = false

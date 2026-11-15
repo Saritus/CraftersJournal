@@ -399,6 +399,44 @@ step("lista de compra", function()
   assert(stv.bySource.vendor.total >= 1 and stv.bySource.ah.total == stv.total - stv.bySource.vendor.total, "cuentas por origen")
   for i, l in ipairs(SH.Lists()) do if l.key == "vial" then table.remove(SH.Lists(), i) break end end
   ES:RenderShopping()
+  -- Una lista vieja se quita desde el panel pequeño: la ✕ de su título (CurseForge: "no
+  -- hay forma de borrar los cálculos viejos" desde la AH)
+  do
+    SH.Add("calc", "Calc vieja", { { itemID = 2589, quantity = 3, source = "ah", cost = 50 } }, { key = "vieja" })
+    ES:RenderShopping()
+    local head
+    for _, row in ipairs(mini.rows) do
+      if row._shown ~= false and row.line and row.line.section == "Calc vieja" then head = row end
+    end
+    assert(head and head.remove._shown ~= false, "el título de la lista en el panel de la AH no tiene ✕")
+    head.remove._scripts.OnClick(head.remove)
+    for _, l in ipairs(SH.Lists()) do assert(l.key ~= "vieja", "la ✕ del panel de la AH no quitó la lista") end
+    for _, row in ipairs(mini.rows) do
+      assert(not (row._shown ~= false and row.line and row.line.section == "Calc vieja"), "la lista quitada sigue en el panel")
+      assert(not (row._shown ~= false and row.line and not row.line.section and row.remove._shown == true), "una fila de material tiene la ✕ de lista")
+    end
+    log[#log+1] = "     panel de la AH: la ✕ del título quita esa lista"
+    -- Y al revés: quitada en la pestaña (la ✕ de su total), tampoco sale en el panel
+    -- de la AH (CurseForge: "la quito en la pestaña y sigue en la de la AH")
+    SH.Add("calc", "Calc tab", { { itemID = 2589, quantity = 3, source = "ah", cost = 50 } }, { key = "tab" })
+    ES:RenderShopping()
+    local inMini = false
+    for _, row in ipairs(mini.rows) do if row._shown ~= false and row.line and row.line.section == "Calc tab" then inMini = true end end
+    assert(inMini, "la lista nueva no sale en el panel de la AH")
+    local page = ES.shoppingPage
+    local total
+    for _, row in ipairs(page.rows) do
+      if row._shown ~= false and row.onSkip and row.title and tostring(row.title._text):find("listos") then total = row end
+    end
+    -- (la última fila de total es la de "Calc tab", la más nueva)
+    assert(total, "la pestaña no tiene la fila de total con ✕")
+    total.onSkip()
+    for _, l in ipairs(SH.Lists()) do assert(l.key ~= "tab", "la ✕ de la pestaña no quitó la lista") end
+    for _, row in ipairs(mini.rows) do
+      assert(not (row._shown ~= false and row.line and row.line.section == "Calc tab"), "quitada en la pestaña, sigue en el panel de la AH")
+    end
+    log[#log+1] = "     quitada en la pestaña: también desaparece del panel de la AH"
+  end
   -- Colocación: a la derecha de la ventana de vender en la AH si se ve; si no, pegado a la AH
   local anchor
   local savedSP, savedSell = mini.SetPoint, CraftersJournalAuctionSellPanel
@@ -1258,7 +1296,7 @@ step("portada: tarjetas de profesiones", function()
   assert(tostring(lw.level._text):find("%d+|r / %d+"), "nivel no mostrado: " .. tostring(lw.level._text))
   -- Pestañas laterales: cada una abre su página y queda marcada
   local mf = ES:GetMainFrame()
-  assert(#mf.tabs == 6, "pestañas: " .. #mf.tabs)
+  assert(#mf.tabs == 7, "pestañas: " .. #mf.tabs)
   for _, tab in ipairs(mf.tabs) do
     tab._scripts.OnClick(tab)
     assert(ES.db.lastPage == tab.key, "la pestaña " .. tab.key .. " no abre su página")
@@ -2141,8 +2179,58 @@ step("icono menos fabricaciones: pesa cada fabricación al elegir", function()
   local base = ES.Planner.RouteScore(plan)
   plan.ctx.opts.craftWeight = 100
   assert(ES.Planner.RouteScore(plan) - base == 10 * (100 - 5), "el peso no cuenta en la puntuación")
+  -- Con el icono, cada fabricación pesa lo que tarda (CurseForge: recetas de 30-50 s):
+  -- una de 50 s pesa ~14 veces una normal; sin el icono, todas igual
+  local savedSpell = C_Spell
+  C_Spell = { GetSpellInfo = function(id)
+    if id == 990001 then return { castTime = 50000 } end
+    if id == 990002 then return { castTime = 3000 } end
+  end }
+  ES.Planner.ClearCraftSeconds()
+  local slow = ES.Planner.RecipeWeight({ craftWeight = 100 }, 990001)
+  local normal = ES.Planner.RecipeWeight({ craftWeight = 100 }, 990002)
+  assert(math.abs(normal - 100) < 1e-9 and slow > 13 * normal, string.format("la lenta pesa %.0f, la normal %.0f", slow, normal))
+  assert(ES.Planner.RecipeWeight({}, 990001) == ES.Planner.RecipeWeight({}, 990002), "sin el icono, todas pesan igual")
+  local slowPlan = { fees = 0, steps = { { id = 990001, crafts = 10, unitValue = 0, unitCost = 0, from = 1, to = 5 } }, ctx = { opts = { craftWeight = 100 } } }
+  local fastPlan = { fees = 0, steps = { { id = 990002, crafts = 10, unitValue = 0, unitCost = 0, from = 1, to = 5 } }, ctx = { opts = { craftWeight = 100 } } }
+  assert(ES.Planner.RouteScore(slowPlan) > ES.Planner.RouteScore(fastPlan) + 10000, "con el icono, la ruta lenta puntúa peor")
+  C_Spell = savedSpell
   page.fewerButton:GetScript("OnClick")(page.fewerButton)
   settings.fewerCrafts = saved
+  log[#log+1] = string.format("     menos fabricaciones: una de 50 s pesa %.0f, una de 3 s %.0f", slow, normal)
+end)
+step("ruta: lo que se tarda en fabricar cada paso y la ruta", function()
+  -- Una receta lenta (50 s por fabricación): su fila lo dice en naranja, el tooltip da
+  -- el tiempo por fabricación y del paso, y la fila del total el de toda la ruta
+  local page
+  for _, p in ipairs(ES.professionPages) do if p.profKey == "Leatherworking" then page = p end end
+  local savedPlan, savedFrom, savedSpell = page.plan, page.from, C_Spell
+  local opts = ES:PlanOptions("Leatherworking", 1, 75)
+  opts.owned = nil
+  page.from = 1
+  page.plan = ES.Planner:Plan(ES.Data.Leatherworking, opts)
+  local st1 = page.plan.steps[1]
+  local slowID = st1.id
+  C_Spell = { GetSpellInfo = function(id) if id == slowID then return { castTime = 50000 } end return { castTime = 0 } end }
+  ES.Planner.ClearCraftSeconds()
+  ES:RenderPlan(page)
+  local slowLine, totalLine
+  for _, l in ipairs(page.lines) do
+    if l.level == st1.from .. "–" .. st1.to and l.onClick then slowLine = slowLine or l end
+    if l.total then totalLine = l end
+  end
+  assert(slowLine and tostring(slowLine.sub):find("ff9933", 1, true) and tostring(slowLine.sub):find("min", 1, true),
+    "la fila de la receta lenta dice el tiempo en naranja: " .. tostring(slowLine and slowLine.sub))
+  assert(totalLine and tostring(totalLine.sub):find("min", 1, true), "el total dice el tiempo de la ruta: " .. tostring(totalLine and totalLine.sub))
+  local lines = {}
+  local savedAL = GameTooltip.AddLine
+  GameTooltip.AddLine = function(_, a) lines[#lines + 1] = tostring(a) end
+  slowLine.tooltip(CreateFrame("Button"))
+  GameTooltip.AddLine = savedAL
+  assert(table.concat(lines, "|"):find("Cada fabricación", 1, true), "el tooltip da el tiempo por fabricación: " .. table.concat(lines, "|"))
+  C_Spell, page.plan, page.from = savedSpell, savedPlan, savedFrom
+  ES.Planner.ClearCraftSeconds()
+  log[#log+1] = "     paso lento: " .. tostring(slowLine.sub):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. " · total: " .. tostring(totalLine.sub)
 end)
 step("ruta: el rango aprendido sale hecho", function()
   -- Alquimia 63 con tope 75: la ruta pide Oficial; al aprenderlo (tope 150) se tacha
@@ -3117,12 +3205,31 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     assert(#tips == 1 and tips[1]:find("/cj opciones", 1, true), "la primera vez, el aviso de que se puede quitar: " .. table.concat(tips, " | "))
     ES:WindowTip("sell")
     assert(#tips == 1, "el aviso solo sale una vez")
-    -- Engranaje junto a la ✕: abre las opciones
+    -- Engranaje junto a la ✕: un menú pequeño con la opción justa de esta ventana
+    -- ("No mostrar esta ventana") y, debajo, todas las opciones
     local savedOpen, opened = ES.OpenOptions, false
     ES.OpenOptions = function() opened = true end
     assert(sp.optionsGear, "la ventana de vender tiene el engranaje de opciones")
     sp.optionsGear._scripts.OnClick(sp.optionsGear)
-    assert(opened, "el engranaje abre las opciones")
+    local menu = sp.optionsGear.menu
+    assert(menu and menu._shown == true and not opened, "el engranaje abre su menú, no el panel entero")
+    menu._scripts.OnShow(menu)
+    assert(tostring(menu.title._text):find("Vender en la AH"), "el menú dice qué ventana es: " .. tostring(menu.title._text))
+    assert(tostring(menu.off._text):find("No mostrar"), "botón para quitarla: " .. tostring(menu.off._text))
+    menu.all._scripts.OnClick(menu.all)
+    assert(opened and menu._shown == false, "Todas las opciones: abre el panel y cierra el menú")
+    sp.optionsGear._scripts.OnClick(sp.optionsGear)
+    menu.off._scripts.OnClick(menu.off)
+    assert(ES.db.noAuctionSellWindow == true and sp._shown == false and menu._shown == false,
+      "No mostrar esta ventana: como quitar su casilla, y se cierra al momento")
+    assert(tostring(tips[#tips]):find("/cj opciones", 1, true), "dice dónde volver a activarla: " .. tostring(tips[#tips]))
+    -- (otra vez con el objeto azul de arriba: lo de abajo mira el color del nombre)
+    ES.GetItemData = function(_, id) if id == UP then return "Blue Thing", 3, 134400 end return savedData(ES, id) end
+    ITEM_QUALITY_COLORS[3] = { r = 0, g = 0.44, b = 0.87, hex = "|cff0070dd" }
+    ES:SetOption("noAuctionSellWindow", true)
+    ES.GetItemData, ITEM_QUALITY_COLORS[3] = savedData, savedQC
+    assert(ES.db.noAuctionSellWindow == nil and sp._shown == true, "activada otra vez, vuelve")
+    log[#log+1] = "     engranaje: menú con No mostrar esta ventana y Todas las opciones"
     ES.OpenOptions = savedOpen
     ES.Print = savedPrintT
     local upRow
@@ -3540,7 +3647,7 @@ end)
 step("sin modo desarrollo: ni Subastas, ni Flipping, ni Pesca, ni buscador", function()
   assert(ES.DEV == nil and ES.DEV_BUILD == nil, "queda el modo desarrollo")
   local f = ES:GetMainFrame()
-  assert(#f.tabs == 6, "pestañas: " .. #f.tabs) -- portada, ganar dinero, inventario, calculadora, lista de compra y colección
+  assert(#f.tabs == 7, "pestañas: " .. #f.tabs) -- portada, lista de compra, ganar dinero, inventario, Merchant's Favor, calculadora y colección
   assert(not f.globalSearch, "queda el buscador de la cabecera")
   assert(not ES.optionsPanel, "queda el panel de Opciones (con el interruptor de vista de jugador)")
   -- Lo guardado de versiones anteriores (la última página) vuelve a la portada
@@ -4154,6 +4261,139 @@ step("dinero: negativos, NaN e infinito no dan error", function()
   assert(neg:sub(1, 1) == "-" and neg:find("1"), "negativo con el signo delante: " .. neg)
   assert(not ES.Money(12345):find("^%-"), "positivo sin signo")
 end)
+step("Merchant's Favor: con qué llenar cada caja y cuál da el punto más barato", function()
+  local EXPERT_FABRICS, APPRENTICE_ORE, BOLT, HIDE, COPPER = 248708, 248683, 4339, 4236, 2770
+  local savedScans, savedCount, savedSkill = ES.db.scans, ES.ItemCount, ES.GetProfessionSkill
+  ES.GetProfessionSkill = function() return nil end -- (sin profesiones: solo comprar)
+  -- Expert Fabrics (30 Favor): caja 20g; 8 Bolt of Mageweave a 25s (2g) o 2 Cured Heavy Hide a 3g (6g)
+  -- Apprentice Ore (5 Favor): caja 50s; 20 Copper Ore a 10c (2s)
+  ES.db.scans = { [ES:RealmKey()] = { time = time() - 120, items = {
+    [EXPERT_FABRICS] = { minUnit = 200000, quantity = 1, listings = 1 },
+    [APPRENTICE_ORE] = { minUnit = 5000, quantity = 3, listings = 3 },
+    [BOLT] = { minUnit = 2500, quantity = 50, listings = 5 },
+    [HIDE] = { minUnit = 30000, quantity = 10, listings = 2 },
+    [COPPER] = { minUnit = 10, quantity = 200, listings = 10 },
+  } } }
+  local bags = {}
+  ES.ItemCount = function(_, id) return bags[id] or 0 end
+  ES.Favor.Clear()
+  local function Find(list, id) for _, o in ipairs(list) do if o.crate.id == id then return o end end end
+  local list = ES.Favor:Options()
+  local ef, ao = Find(list, EXPERT_FABRICS), Find(list, APPRENTICE_ORE)
+  assert(ef and ef.fill and ef.fill.itemID == BOLT and math.abs(ef.fill.cost - 20000) < 1, "Expert Fabrics: los Bolt (2g), no las pieles: " .. tostring(ef and ef.fill and ef.fill.itemID))
+  assert(math.abs(ef.perFavor - 220000 / 30) < 1, "Expert Fabrics: (20g + 2g) / 30 por punto: " .. tostring(ef.perFavor))
+  assert(ao and math.abs(ao.perFavor - (5000 + 200) / 5) < 1, "Apprentice Ore: (50s + 2s) / 5: " .. tostring(ao and ao.perFavor))
+  assert(list[1].crate.id == APPRENTICE_ORE, "lo más barato por punto, primero: " .. tostring(list[1].crate.id))
+  -- Una caja tuya: la caja no cuesta; si ya llevas un paquete entero, se usa ese
+  bags[EXPERT_FABRICS], bags[HIDE] = 1, 2
+  ef = Find(ES.Favor:Options(), EXPERT_FABRICS)
+  assert(ef.have == 1 and ef.crateCost == 0 and ef.fill.itemID == BOLT, "las pieles que llevas cuestan 6g frente a 2g: no compensa")
+  bags[HIDE], bags[BOLT] = nil, 8
+  ef = Find(ES.Favor:Options(), EXPERT_FABRICS)
+  assert(ef.haveFill, "llevas los 8 Bolt: ya tienes el paquete")
+  -- La pestaña: tus cajas arriba, luego las de la AH; clic = a la lista de compra
+  ES:GetMainFrame()
+  ES:SelectPage("favor")
+  local page = ES.favorPage
+  ES:RenderFavor()
+  local sections, mineRow = {}, nil
+  for _, row in ipairs(page.rows) do
+    if row._shown ~= false and row.section and row.section._text and row.section._text ~= "" then sections[#sections + 1] = tostring(row.section._text) end
+    if row._shown ~= false and row.item == EXPERT_FABRICS then mineRow = row end
+  end
+  assert(#sections == 2 and sections[1]:find("Tus cajas") and sections[2]:find("AH"), "secciones: " .. table.concat(sections, " | "))
+  assert(mineRow and tostring(mineRow.sub._text):find("ya lo tienes"), "tu caja dice que ya tienes el paquete: " .. tostring(mineRow and mineRow.sub._text))
+  local added
+  local savedAdd = ES.AddToShopping
+  ES.AddToShopping = function(_, kind, title, items) added = { kind = kind, items = items } end
+  bags[BOLT] = nil
+  ES:RenderFavor()
+  for _, row in ipairs(page.rows) do
+    if row._shown ~= false and row.item == APPRENTICE_ORE and row.onClick then row.onClick() end
+  end
+  ES.AddToShopping = savedAdd
+  assert(added and added.kind == "favor" and added.items[1].itemID == APPRENTICE_ORE and added.items[2].itemID == COPPER,
+    "clic en una caja de la AH: la caja y su paquete a la lista de compra")
+  if mineRow.tooltip then mineRow.tooltip(mineRow) end -- (sin errores)
+  ES.db.scans, ES.ItemCount, ES.GetProfessionSkill = savedScans, savedCount, savedSkill
+  ES.Favor.Clear()
+  ES:SelectPage("home")
+  log[#log+1] = string.format("     Expert Fabrics: 8 Bolt; Apprentice Ore, %s/punto, el más barato", ES.Money(math.floor(ao.perFavor)))
+end)
+step("yendo por el mundo: los avisos de objetos y bolsas no hacen trabajar al addon", function()
+  -- Con la AH y la profesión cerradas, GET_ITEM_INFO_RECEIVED y BAG_UPDATE_DELAYED (sin
+  -- parar yendo por el mundo) no programan repintados de esas ventanas
+  local savedTimer, savedAH, savedSellRefresh, savedCraftRefresh = C_Timer.After, ES.IsAuctionHouseOpen, ES.AuctionSell.Refresh, ES.CraftWindow.Refresh
+  local savedPF, savedTSF = ProfessionsFrame, TradeSkillFrame
+  local sells, crafts = 0, 0
+  C_Timer.After = function(_, fn) fn() end
+  ES.IsAuctionHouseOpen = function() return false end
+  ES.AuctionSell.Refresh = function() sells = sells + 1 end
+  ES.CraftWindow.Refresh = function() crafts = crafts + 1 end
+  ProfessionsFrame, TradeSkillFrame = nil, nil
+  for _ = 1, 30 do FireEvent("GET_ITEM_INFO_RECEIVED", 2589, true) FireEvent("BAG_UPDATE_DELAYED") end
+  assert(sells == 0, "con la AH cerrada, la ventana de vender se repintó " .. sells .. " veces")
+  assert(crafts == 0, "sin profesión abierta, la ventana de la profesión se repintó " .. crafts .. " veces")
+  C_Timer.After, ES.IsAuctionHouseOpen, ES.AuctionSell.Refresh, ES.CraftWindow.Refresh = savedTimer, savedAH, savedSellRefresh, savedCraftRefresh
+  ProfessionsFrame, TradeSkillFrame = savedPF, savedTSF
+  log[#log+1] = "     60 avisos de objetos y bolsas con todo cerrado: 0 repintados"
+end)
+step("historial de mercado: en segundo plano, sin congelar el juego", function()
+  -- En el juego (con debugprofilestop) el índice se construye repartido entre
+  -- fotogramas: mientras, se usa el anterior; al acabar, lo que esperaba se hace una vez
+  local savedDPS, savedTimer, savedRefresh = debugprofilestop, C_Timer.After, ES.RefreshAllViews
+  local queue, clock = {}, 0
+  debugprofilestop = function() clock = clock + 1 return clock end -- (1 ms por consulta)
+  C_Timer.After = function(_, fn) queue[#queue + 1] = fn end
+  local refreshes = 0
+  ES.RefreshAllViews = function() refreshes = refreshes + 1 end
+  local old = ES.Market:Index()
+  -- Un escaneo nuevo (otra entrada en el historial): el índice cambia
+  local key = ES:RealmKey()
+  ES.db.history = ES.db.history or {}
+  local savedTrack = ES.db.track
+  ES.db.track = { [key] = { time = time(), sigs = {} } }
+  for i = 1, 3000 do ES.db.track[key].sigs[i .. ":1:100:x"] = "1" end
+  local served = ES.Market:Index()
+  assert(ES.Market.Building(), "con un historial nuevo, el índice se construye en segundo plano")
+  assert(served == old or served.empty, "mientras, se usa el anterior (o uno vacío), sin esperar")
+  local ran = false
+  ES.Market.WhenReady(function() ran = true end)
+  local frames = 0
+  while #queue > 0 and frames < 10000 do
+    local fn = table.remove(queue, 1)
+    fn()
+    frames = frames + 1
+  end
+  assert(not ES.Market.Building() and ran, "al acabar, lo que esperaba al índice se hace")
+  assert(frames > 1, "repartido en varios fotogramas: " .. frames)
+  assert(refreshes == 0, "con algo esperando, no se repinta otra vez")
+  local new = ES.Market:Index()
+  assert(new ~= old and not new.empty, "y después se usa el nuevo")
+  debugprofilestop, C_Timer.After, ES.RefreshAllViews = savedDPS, savedTimer, savedRefresh
+  ES.db.track = savedTrack
+  ES.Market:Index() -- (de nuevo, sin debugprofilestop: de golpe)
+  log[#log+1] = string.format("     historial nuevo: %d fotogramas en segundo plano, sin esperar", frames)
+end)
+step("un punto de arma o defensa no hace trabajar al addon", function()
+  -- SKILL_LINES_CHANGED llega con cada punto de arma o defensa (en combate, sin parar):
+  -- sin cambio en tus profesiones, ni se mira el tope ni se refrescan las rutas
+  local savedSkill, savedAfter, savedStop, savedTimer = ES.GetProfessionSkill, ES.RefreshAfterSkill, ES.CheckCraftStop, C_Timer.After
+  local level, refreshed, checked = 100, 0, 0
+  ES.GetProfessionSkill = function(_, line) if line == ES.Data.Leatherworking.skillLine then return level, 150 end end
+  ES.RefreshAfterSkill = function() refreshed = refreshed + 1 end
+  ES.CheckCraftStop = function() checked = checked + 1 end
+  C_Timer.After = function(_, fn) fn() end
+  FireEvent("SKILL_LINES_CHANGED") -- (la primera vez, de referencia)
+  refreshed, checked = 0, 0
+  for _ = 1, 20 do FireEvent("SKILL_LINES_CHANGED") FireEvent("CHAT_MSG_SKILL") end
+  assert(refreshed == 0 and checked == 0, string.format("sin cambio en las profesiones trabajó: %d refrescos, %d comprobaciones", refreshed, checked))
+  level = 101
+  FireEvent("CHAT_MSG_SKILL")
+  assert(refreshed == 1 and checked == 1, "al subir Peletería no se refrescó")
+  ES.GetProfessionSkill, ES.RefreshAfterSkill, ES.CheckCraftStop, C_Timer.After = savedSkill, savedAfter, savedStop, savedTimer
+  log[#log+1] = "     40 puntos de arma/defensa: 0 trabajo; 1 punto de Peletería: se refresca"
+end)
 step("métodos de marcos que existen en el juego", function()
   local REAL = {}
   for name in ([[
@@ -4172,7 +4412,7 @@ step("métodos de marcos que existen en el juego", function()
     SetStatusBarTexture SetTexCoord SetTextColor SetTexture SetThumbTexture SetToAlpha SetValue
     SetValueStep SetVertexColor SetVerticalScroll SetWidth SetWordWrap StartMoving Stop
     StopMovingOrSizing UnlockHighlight UnregisterAllEvents UpdateScrollChildRect
-    SetGradientAlpha
+    SetGradientAlpha SetRotation
   ]]):gmatch("%a+") do REAL[name] = true end
   -- (SetGradientAlpha ya no existe en el cliente, pero solo se usa protegida con
   -- "elseif tex.SetGradientAlpha" para clientes viejos: HomeUI.lua)

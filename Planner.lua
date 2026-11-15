@@ -611,6 +611,11 @@ local function NewContext(data, opts)
   if not shared then
     for id, r in pairs(data.recipes) do
       local learn = r.out and Planner.LearnSkill(r, opts)
+      -- opts.knownProducers (Ganar dinero): solo se fabrica lo intermedio con recetas
+      -- que ya sabes. Con las que podrías aprender (lo de las rutas), proponía comprar
+      -- 684 Heavy Stone para hacer Heavy Blasting Powder aunque no supieras hacerla
+      -- (CurseForge). (r.id: Annotate, antes de NewContext)
+      if learn and opts.knownProducers and not Known(r) then learn = nil end
       if learn and learn <= opts.to then
         local list = ctx.producers[r.out[1]] or {}
         list[#list + 1] = id
@@ -979,16 +984,56 @@ local GPS_NEAR_MIN = 500       -- (o 5s) de la mejor
 -- bolsas cuenta por lo que te darían vendiéndolo, con un margen de BAGS_TIE_PCT a
 -- favor de usarlo (como Planner.BagsWorth): no se gastan 34 Medium Hide de 15g
 -- para ahorrar 1g
+-- Segundos por fabricación de una receta: su lanzamiento en el juego (algunas de
+-- Forever tardan 30-50 s) con un mínimo (las instantáneas esperan el tiempo global) y
+-- un margen. Se pregunta una vez por receta y sesión
+local DEFAULT_CAST = 3        -- s si el juego no dice el lanzamiento
+local MIN_CAST = 1.5
+local CRAFT_OVERHEAD = 0.5
+local castMemo = {}
+function Planner.CraftSeconds(recipeID)
+  local s = castMemo[recipeID]
+  if s then return s end
+  local ms
+  if C_Spell and C_Spell.GetSpellInfo then
+    local ok, info = pcall(C_Spell.GetSpellInfo, recipeID)
+    if ok and type(info) == "table" then ms = info.castTime end
+  end
+  if not ms and GetSpellInfo then
+    local ok, _, _, _, castTime = pcall(GetSpellInfo, recipeID)
+    if ok then ms = castTime end
+  end
+  local known = type(ms) == "number" and ms > 0
+  s = math.max(MIN_CAST, known and ms / 1000 or DEFAULT_CAST) + CRAFT_OVERHEAD
+  -- (siempre se guarda: el planificador lo pide miles de veces por ruta, y los datos
+  -- de los hechizos son del propio cliente, no llegan más tarde)
+  castMemo[recipeID] = s
+  return s
+end
+function Planner.ClearCraftSeconds() castMemo = {} end -- (pruebas)
+-- Una fabricación "normal" (3 s): con "Menos fabricaciones", cada una pesa lo que
+-- tarda frente a esta (una de 50 s pesa como ~14 normales)
+Planner.NORMAL_CRAFT_SECONDS = DEFAULT_CAST + CRAFT_OVERHEAD
+
 -- Peso de cada fabricación: CRAFT_COST, o el de opts.craftWeight (icono "Menos
--- fabricaciones": la ruta paga más a cambio de fabricar menos veces)
-Planner.FEWER_CRAFTS_WEIGHT = 100 -- 1s por fabricación con el icono activado
+-- fabricaciones": la ruta paga más a cambio de fabricar menos veces y, con él, cuenta
+-- lo que tarda cada una: evita las lentas aunque salgan más baratas, CurseForge)
+Planner.FEWER_CRAFTS_WEIGHT = 100 -- 1s por fabricación normal con el icono activado
 local function CraftWeight(opts)
   return opts and opts.craftWeight or CRAFT_COST
 end
 Planner.CraftWeight = CraftWeight
+-- El peso de una fabricación de esta receta: sin el icono, igual para todas
+local function RecipeWeight(opts, recipeID)
+  local w = CraftWeight(opts)
+  if not (opts and opts.craftWeight) or not recipeID then return w end
+  return w * Planner.CraftSeconds(recipeID) / Planner.NORMAL_CRAFT_SECONDS
+end
+Planner.RecipeWeight = RecipeWeight
 
 function Planner.RouteScore(plan)
-  local CW = CraftWeight(plan.ctx and plan.ctx.opts)
+  local opts = plan.ctx and plan.ctx.opts
+  local CW = CraftWeight(opts)
   local score, crafts = plan.fees + (plan.toolsCost or 0), 0
   for _, st in ipairs(plan.steps) do
     local gain = st.crafts * (st.unitValue - st.unitCost)
@@ -996,7 +1041,8 @@ function Planner.RouteScore(plan)
     local per = st.crafts / math.max(1, st.to - st.from)
     if gain > 0 and per > PROFIT_FULL_CRAFTS then gain = gain * PROFIT_FULL_CRAFTS / per end
     score = score - gain
-    crafts = crafts + st.crafts + (st.aheadCrafts or 0)
+    -- (con "Menos fabricaciones", cada una pesa lo que tarda: RecipeWeight)
+    score = score + RecipeWeight(opts, st.id) * (st.crafts + (st.aheadCrafts or 0))
   end
   for _, c in ipairs(plan.crafted or {}) do crafts = crafts + c.quantity end
   score = score + CW * crafts + GPS_STEP_COST * math.max(0, #plan.steps - 1)
@@ -1118,7 +1164,8 @@ local function ShortestRoute(data, opts, ctx, weight, skip, fixed, paid)
       if allowed and rc.learn <= s and (prev[i] < INF or bestIdx or s == opts.from) then
         local pc = PointCost(ctx, rc, s)
         if pc then
-          local point = pc[1] + weight * pc[2]
+          -- (con "Menos fabricaciones", lo que tarda cada una de esta receta: RecipeWeight)
+          local point = pc[1] + (weight > 0 and opts.craftWeight and RecipeWeight(opts, rc.id) or weight) * pc[2]
           local base, baseIdx = bestAll, bestIdx
           if rc.cd and bestIdx == i then base, baseIdx = best2All, best2Idx end
           -- (paid: recetas que la ruta ya aprende en otro tramo: no se pagan otra vez)
@@ -1524,7 +1571,7 @@ function Planner.PlanGPS(data, opts)
               for s = from, st.to - 1 do
                 local pc = PointCost(ctx, rc, s)
                 if not pc then sum = nil break end
-                sum = sum + pc[1] + CW * pc[2]
+                sum = sum + pc[1] + RecipeWeight(opts, rc.id) * pc[2]
               end
               -- (por punto: los tramos cortos no salen baratos solo por ser cortos)
               if sum then cands[#cands + 1] = { id = rc.id, from = from, cost = sum / (st.to - from) } end
@@ -2550,9 +2597,9 @@ end
 function Planner:RecipeMarket(data, opts)
   local o = { from = 1, to = 300, includeScrolls = false, ignoreSupply = true,
     hours = opts.hours, neutral = opts.neutral, sourcedScrolls = opts.sourcedScrolls, noQuests = opts.noQuests,
-    noLimited = opts.noLimited }
+    noLimited = opts.noLimited, knownProducers = opts.knownProducers }
+  Annotate(data) -- (antes del contexto: knownProducers pregunta por r.id)
   local ctx = NewContext(data, o)
-  Annotate(data)
   local list = {}
   -- "rep": se lista para que veas qué te daría subir la reputación, pero la ruta no la usa
   local OBTAINABLE = { trainer = true, vendor = true, scroll = true, quest = true, ah = true, owned = true, known = true, rep = true }
@@ -2611,6 +2658,22 @@ local LOCAL_NAMES = {
   [185] = { "Cooking", "Cocina" },
   [129] = { "First Aid", "Primeros auxilios" },
 }
+
+-- Huella de los niveles y topes de tus profesiones (sin las armas ni la defensa):
+-- SKILL_LINES_CHANGED y CHAT_MSG_SKILL llegan también con cada punto de arma o
+-- defensa, que en combate son continuos. Con la huella igual no se hace nada (antes
+-- se releían todas las profesiones y se recalculaban los avisos de las rutas
+-- empezadas: ~5% de CPU yendo de misiones, CurseForge)
+function ES:ProfessionSkillStamp()
+  local parts = {}
+  for _, p in ipairs(ES.PROFESSIONS or {}) do
+    local data = ES.Data[p.key]
+    local rank, cap
+    if data and data.skillLine then rank, cap = self:GetProfessionSkill(data.skillLine) end
+    parts[#parts + 1] = tostring(rank) .. "/" .. tostring(cap)
+  end
+  return table.concat(parts, ",")
+end
 
 function ES:GetProfessionSkill(skillLine)
   if GetProfessions and GetProfessionInfo then

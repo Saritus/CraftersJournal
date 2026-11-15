@@ -49,9 +49,71 @@ local TIPS = {
   sell = "La ventana de vender en la AH sale sola al abrir la Casa de Subastas. Si no la quieres, quítala en /cj opciones.",
   craft = "Esta ventana sale sola al abrir una profesión. Si no la quieres, quítala en /cj opciones.",
 }
--- Engranaje en la esquina de las ventanas que salen solas (vendedor, AH, profesión):
--- abre estas opciones, donde se quita. `close`: su ✕, si tiene (va a su izquierda)
-function ES:OptionsGear(frame, close)
+-- Nombre de una opción (su etiqueta en el panel), para el menú del engranaje
+local function OptionLabel(key)
+  for _, o in ipairs(ES.OPTIONS or {}) do
+    if o.key == key then return L[o.label] end
+  end
+end
+
+-- Menú pequeño del engranaje: la opción justa de esa ventana ("No mostrar esta
+-- ventana", lo mismo que quitar su casilla en las opciones) y, debajo, todas las
+-- opciones. Antes el engranaje abría el panel entero y había que buscar la casilla
+local function GearMenu(gear, frame, key)
+  local m = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+  m:SetSize(230, 112)
+  m:SetPoint("TOPRIGHT", gear, "BOTTOMRIGHT", 6, -4)
+  if m.SetFrameStrata then m:SetFrameStrata("DIALOG") end
+  if m.SetClampedToScreen then m:SetClampedToScreen(true) end
+  m:EnableMouse(true)
+  m:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8X8",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 },
+  })
+  m:SetBackdropColor(0.08, 0.06, 0.04, 0.98)
+  m:SetBackdropBorderColor(0.52, 0.38, 0.17, 1)
+  m.title = m:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  m.title:SetPoint("TOPLEFT", 12, -10)
+  m.title:SetPoint("RIGHT", -12, 0)
+  m.title:SetJustifyH("LEFT")
+  m.title:SetWordWrap(false)
+  m.off = CreateFrame("Button", nil, m, "UIPanelButtonTemplate")
+  m.off:SetSize(206, 24)
+  m.off:SetPoint("TOP", 0, -30)
+  m.off:SetScript("OnClick", function()
+    m.open = false
+    m:Hide()
+    ES:SetOption(key, false) -- (como quitar su casilla: la ventana se cierra al momento)
+    ES:Print(string.format(L["%s: desactivada. Vuelve a activarla en /cj opciones."], OptionLabel(key) or key))
+  end)
+  m.note = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  m.note:SetPoint("TOP", m.off, "BOTTOM", 0, -5)
+  m.note:SetWidth(206)
+  m.all = CreateFrame("Button", nil, m, "UIPanelButtonTemplate")
+  m.all:SetSize(206, 22)
+  m.all:SetPoint("BOTTOM", 0, 10)
+  m.all:SetScript("OnClick", function()
+    m.open = false
+    m:Hide()
+    ES:OpenOptions()
+  end)
+  -- Textos al mostrarse (el idioma puede haber cambiado)
+  m:SetScript("OnShow", function()
+    m.title:SetText(OptionLabel(key) or "Crafter's Journal")
+    m.off:SetText(L["No mostrar esta ventana"])
+    m.note:SetText(L["Se vuelve a activar en /cj opciones."])
+    m.all:SetText(L["Todas las opciones"])
+  end)
+  m:SetScript("OnHide", function() m.open = false end)
+  m:Hide()
+  return m
+end
+
+-- Engranaje en la esquina de las ventanas que salen solas (vendedor, AH, profesión).
+-- `close`: su ✕, si tiene (va a su izquierda). `key`: la opción que la quita; con
+-- ella, el clic abre un menú pequeño con esa opción (GearMenu); sin ella, el panel
+function ES:OptionsGear(frame, close, key)
   local b = CreateFrame("Button", nil, frame)
   b:SetSize(18, 18)
   -- La ✕ (UIPanelCloseButton) mide 32 px con ~6 de aire alrededor del dibujo: pegado a
@@ -73,11 +135,19 @@ function ES:OptionsGear(frame, close)
     pushed:SetPoint("BOTTOMRIGHT", 1, -1)
     if pushed.SetVertexColor then pushed:SetVertexColor(0.6, 0.5, 0.35) end
   end
-  b:SetScript("OnClick", function() ES:OpenOptions() end)
+  b:SetScript("OnClick", function()
+    if not key then ES:OpenOptions() return end
+    b.menu = b.menu or GearMenu(b, frame, key)
+    GameTooltip:Hide()
+    -- (abierto o no: su propia marca, que OnHide pone a false también cuando se
+    -- cierra la ventana de debajo)
+    b.menu.open = not b.menu.open
+    b.menu:SetShown(b.menu.open)
+  end)
   b:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_TOP")
     GameTooltip:AddLine(L["Opciones"])
-    GameTooltip:AddLine(L["Si no quieres que esta ventana salga sola, quítala en las opciones."], 1, 1, 1, true)
+    GameTooltip:AddLine(L["Clic: dejar de mostrar esta ventana, o ver todas las opciones."], 1, 1, 1, true)
     GameTooltip:Show()
   end)
   b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -138,6 +208,7 @@ local OPTIONS = {
     get = function() return not (ES.db.minimap and ES.db.minimap.hide) end,
     set = function(on) ES:SetMinimapShown(on) end },
 }
+ES.OPTIONS = OPTIONS -- (el menú del engranaje saca de aquí el nombre de cada ventana)
 
 local panel
 local function CreatePanel()

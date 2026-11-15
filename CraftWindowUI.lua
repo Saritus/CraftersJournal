@@ -116,7 +116,7 @@ local function CreatePanel(parent)
     Craft.closed = true -- (hasta la próxima vez que abras la profesión)
     f:Hide()
   end)
-  ES:OptionsGear(f, close) -- (abre las opciones, donde se quita esta ventana)
+  ES:OptionsGear(f, close, "noCraftWindow") -- (menú para quitar esta ventana)
   f.sub = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   f.sub:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -3)
   f.sub:SetWidth(WIDTH - 24)
@@ -236,6 +236,9 @@ do
       return
     end
     if event == "TRADE_SKILL_SHOW" then Craft.closed = nil end
+    -- (los cambios de bolsas, solo con una profesión abierta: yendo por el mundo llegan
+    -- a cada botín)
+    if event == "BAG_UPDATE_DELAYED" and not ProfFrame() then return end
     -- (agrupado: al abrirla el juego aún está cargando sus recetas)
     if not queued then
       queued = true

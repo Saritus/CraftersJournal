@@ -25,6 +25,7 @@ Data\Engineering.lua
 Data\Cooking.lua
 Data\FirstAid.lua
 Data\Sources.lua
+Data\Crates.lua
 Data\Names_esES.lua
 Data\Names_deDE.lua
 Data\Names_frFR.lua
@@ -43,6 +44,7 @@ Scanner.lua
 Planner.lua
 Ledger.lua
 Earn.lua
+Favor.lua
 Shopping.lua
 Collection.lua
 UI.lua
@@ -54,6 +56,7 @@ EarnUI.lua
 ShoppingUI.lua
 Disenchant.lua
 InventoryUI.lua
+FavorUI.lua
 Calculator.lua
 CalculatorUI.lua
 CollectionUI.lua
