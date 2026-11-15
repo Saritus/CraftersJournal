@@ -143,18 +143,18 @@ public static class Marketing {
   // Botón para la descripción (Donate, Discord): texto en negrita sobre una píldora de
   // color, a doble tamaño para que se vea nítido. Fondo transparente alrededor
   public static void Badge(string outPath, string text, Color back, Color fore) {
-    using (var font = Pick(new[] { "Segoe UI Black", "Segoe UI" }, 52, FontStyle.Bold))
+    using (var font = Pick(new[] { "Segoe UI Black", "Segoe UI" }, 32, FontStyle.Bold))
     using (var measure = new Bitmap(1, 1))
     using (var mg = Graphics.FromImage(measure)) {
       mg.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
       var size = mg.MeasureString(text, font, 2000, StringFormat.GenericTypographic);
-      int w = (int)Math.Ceiling(size.Width) + 64, h = 92;
+      int w = (int)Math.Ceiling(size.Width) + 40, h = 56;
       var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
       using (var g = Graphics.FromImage(bmp)) {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
         g.Clear(Color.Transparent);
-        using (var p = Rounded(new RectangleF(1, 1, w - 2, h - 2), 14))
+        using (var p = Rounded(new RectangleF(1, 1, w - 2, h - 2), 9))
         using (var br = new SolidBrush(back)) g.FillPath(br, p);
         var fmt = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
         using (var tb = new SolidBrush(fore)) g.DrawString(text, font, tb, new RectangleF(0, 2, w, h), fmt);
