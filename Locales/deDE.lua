@@ -1157,4 +1157,12 @@ ES.Locales.de = {
   ["Tiene enfriamiento: se puede fabricar una cada vez."] = "Hat eine Abklingzeit: du kannst eins nach dem anderen herstellen.",
   [" · con enfriamiento"] = " · mit Abklingzeit",
   ["Este vendedor no tiene: %s. Sigue la fila para ir a otro."] = "Dieser Händler hat nicht: %s. Folge der Zeile, um zu einem anderen zu gehen.",
+  ["Enfriamientos en el lote de hoy"] = "Abklingzeiten in der heutigen Charge",
+  ["Las transmutaciones y la Mooncloth que tienes listas entran en el Lote de hoy, una cada vez, y vuelven solas cuando están otra vez listas. También salen en las recetas que podrías aprender."] = "Transmutationen und Mondstoff, die bereit sind, kommen in die Heutige Charge, eins nach dem anderen, und kehren von selbst zurück, wenn sie wieder bereit sind. Sie erscheinen auch bei den Rezepten, die du lernen könntest.",
+  ["Confirmar antes de vender o comprar todo"] = "Bestätigen vor Alles verkaufen oder Alles kaufen",
+  ["Vender todo, Comprar todo y vender al vendedor desde el Inventario preguntan antes. Cada aviso se quita con \"No volver a mostrar\" y se vuelve a activar en las opciones."] = "Alles verkaufen, Alles kaufen und das Verkaufen an den Händler aus dem Inventar fragen jetzt vorher nach. Jede Abfrage lässt sich mit \"Nicht mehr zeigen\" abschalten und in den Optionen wieder einschalten.",
+  ["Quita recetas de Ganar dinero"] = "Rezepte aus Geld verdienen entfernen",
+  ["Con la X de una fila, Ganar dinero deja de proponerte esa receta (por ejemplo, si pide una estación que no tienes). Se recupera con la fila del final de la lista."] = "Mit dem X einer Zeile schlägt Geld verdienen dieses Rezept nicht mehr vor (zum Beispiel, wenn es eine Station braucht, die du nicht hast). Zurück holst du es mit der Zeile am Ende der Liste.",
+  ["Demanda de TSM"] = "TSM-Nachfrage",
+  ["Si tienes TSM con su app, Ganar dinero tiene en cuenta cuántas se venden al día en tu región y no te propone fabricar más de lo que se vende. Los mínimos se ajustan en las opciones de Ganar dinero."] = "Wenn du TSM mit seiner App hast, berücksichtigt Geld verdienen, wie viele pro Tag in deiner Region verkauft werden, und schlägt nie mehr vor, als verkauft wird. Die Mindestwerte stellst du in den Optionen von Geld verdienen ein.",
 }

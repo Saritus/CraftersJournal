@@ -21,6 +21,19 @@ local L = ES.L
 -- versión anterior (si te saltaste versiones, todo sale junto: ver ShowWhatsNew)
 ES.WHATS_NEW = {
   {
+    version = "0.59.0",
+    items = {
+      { icon = "Interface\\Icons\\INV_Fabric_Moonrag_01", title = "Enfriamientos en el lote de hoy",
+        text = "Las transmutaciones y la Mooncloth que tienes listas entran en el Lote de hoy, una cada vez, y vuelven solas cuando están otra vez listas. También salen en las recetas que podrías aprender." },
+      { icon = "Interface\\Icons\\INV_Misc_Bag_10", title = "Confirmar antes de vender o comprar todo",
+        text = "Vender todo, Comprar todo y vender al vendedor desde el Inventario preguntan antes. Cada aviso se quita con \"No volver a mostrar\" y se vuelve a activar en las opciones." },
+      { icon = "Interface\\Icons\\INV_Scroll_03", title = "Quita recetas de Ganar dinero",
+        text = "Con la X de una fila, Ganar dinero deja de proponerte esa receta (por ejemplo, si pide una estación que no tienes). Se recupera con la fila del final de la lista." },
+      { icon = "Interface\\Icons\\INV_Misc_Spyglass_02", title = "Demanda de TSM",
+        text = "Si tienes TSM con su app, Ganar dinero tiene en cuenta cuántas se venden al día en tu región y no te propone fabricar más de lo que se vende. Los mínimos se ajustan en las opciones de Ganar dinero." },
+    },
+  },
+  {
     version = "0.58.0",
     items = {
       { icon = "Interface\\Icons\\INV_Misc_Gear_01", title = "Opciones en su propia ventana",

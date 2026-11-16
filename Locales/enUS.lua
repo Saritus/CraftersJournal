@@ -1157,4 +1157,12 @@ ES.Locales.en = {
   ["Tiene enfriamiento: se puede fabricar una cada vez."] = "Has a cooldown: you can craft one at a time.",
   [" · con enfriamiento"] = " · has a cooldown",
   ["Este vendedor no tiene: %s. Sigue la fila para ir a otro."] = "This vendor doesn't have: %s. Follow the row to go to another one.",
+  ["Enfriamientos en el lote de hoy"] = "Cooldowns in today's batch",
+  ["Las transmutaciones y la Mooncloth que tienes listas entran en el Lote de hoy, una cada vez, y vuelven solas cuando están otra vez listas. También salen en las recetas que podrías aprender."] = "Transmutes and Mooncloth that are ready now go into Today's batch, one at a time, and come back by themselves when they're ready again. They also show up in the recipes you could learn.",
+  ["Confirmar antes de vender o comprar todo"] = "Confirm before selling or buying everything",
+  ["Vender todo, Comprar todo y vender al vendedor desde el Inventario preguntan antes. Cada aviso se quita con \"No volver a mostrar\" y se vuelve a activar en las opciones."] = "Sell all, Buy all and selling to the vendor from the Inventory now ask first. Each prompt can be turned off with \"Don't show again\" and turned back on in the options.",
+  ["Quita recetas de Ganar dinero"] = "Remove recipes from Make money",
+  ["Con la X de una fila, Ganar dinero deja de proponerte esa receta (por ejemplo, si pide una estación que no tienes). Se recupera con la fila del final de la lista."] = "With the X on a row, Make money stops suggesting that recipe (for example, if it needs a station you don't have). Get it back with the row at the end of the list.",
+  ["Demanda de TSM"] = "TSM demand",
+  ["Si tienes TSM con su app, Ganar dinero tiene en cuenta cuántas se venden al día en tu región y no te propone fabricar más de lo que se vende. Los mínimos se ajustan en las opciones de Ganar dinero."] = "If you have TSM with its app, Make money takes into account how many sell per day in your region and never suggests crafting more than what sells. The minimums are set in the Make money options.",
 }

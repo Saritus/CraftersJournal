@@ -1157,4 +1157,12 @@ ES.Locales.fr = {
   ["Tiene enfriamiento: se puede fabricar una cada vez."] = "A un temps de recharge : vous pouvez en fabriquer une à la fois.",
   [" · con enfriamiento"] = " · avec temps de recharge",
   ["Este vendedor no tiene: %s. Sigue la fila para ir a otro."] = "Ce marchand n'a pas : %s. Suivez la ligne pour aller chez un autre.",
+  ["Enfriamientos en el lote de hoy"] = "Temps de recharge dans le lot du jour",
+  ["Las transmutaciones y la Mooncloth que tienes listas entran en el Lote de hoy, una cada vez, y vuelven solas cuando están otra vez listas. También salen en las recetas que podrías aprender."] = "Les transmutations et l'étoffe lunaire prêtes entrent dans le Lot du jour, une à la fois, et reviennent toutes seules quand elles sont de nouveau prêtes. Elles apparaissent aussi dans les recettes que vous pourriez apprendre.",
+  ["Confirmar antes de vender o comprar todo"] = "Confirmer avant de tout vendre ou tout acheter",
+  ["Vender todo, Comprar todo y vender al vendedor desde el Inventario preguntan antes. Cada aviso se quita con \"No volver a mostrar\" y se vuelve a activar en las opciones."] = "Tout vendre, Tout acheter et la vente au marchand depuis l'Inventaire demandent d'abord. Chaque message se désactive avec \"Ne plus afficher\" et se réactive dans les options.",
+  ["Quita recetas de Ganar dinero"] = "Retirer des recettes de Gagner de l'or",
+  ["Con la X de una fila, Ganar dinero deja de proponerte esa receta (por ejemplo, si pide una estación que no tienes). Se recupera con la fila del final de la lista."] = "Avec le X d'une ligne, Gagner de l'or ne propose plus cette recette (par exemple, si elle demande un atelier que vous n'avez pas). Elle se récupère avec la ligne en bas de la liste.",
+  ["Demanda de TSM"] = "Demande TSM",
+  ["Si tienes TSM con su app, Ganar dinero tiene en cuenta cuántas se venden al día en tu región y no te propone fabricar más de lo que se vende. Los mínimos se ajustan en las opciones de Ganar dinero."] = "Si vous avez TSM avec son application, Gagner de l'or tient compte du nombre vendu par jour dans votre région et ne propose jamais de fabriquer plus que ce qui se vend. Les minimums se règlent dans les options de Gagner de l'or.",
 }
