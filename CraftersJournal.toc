@@ -25,6 +25,7 @@ Data\Engineering.lua
 Data\Cooking.lua
 Data\FirstAid.lua
 Data\Sources.lua
+Data\MatVendors.lua
 Data\Crates.lua
 Data\Names_esES.lua
 Data\Names_deDE.lua

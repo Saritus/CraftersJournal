@@ -119,6 +119,8 @@ end
 CraftersJournalDB = { scans = {} }
 ES.db = CraftersJournalDB
 ES.db.assistant = { enabled = true } -- (el asistente va en beta, desactivado: las pruebas lo activan)
+-- (C_Timer.After no hace nada aquí: sin espera, el paso siguiente se pinta al momento)
+if ES.Assistant then ES.Assistant.CELEBRATE_HOLD = 0 end
 ES.db.minimap = { angle = 200 } -- (formato antiguo: se pasa a minimapPos de LibDBIcon)
 
 local key = ES:RealmKey()
@@ -296,6 +298,29 @@ step("señales de mercado (1 escaneo cada 12 h)", function()
   local said
   for _, l in ipairs(ES.Market.Describe(s)) do if l[1]:find("TSM") then said = l end end
   assert(said and said[2] == nil, "sin datos de TSM: línea gris")
+  -- Recetas para aprender (cuestan oro): ni con poca demanda ni con venta media de TSM
+  -- muy por debajo de nuestro precio (Discord: Frost Tunic)
+  local function Learnable(rate, sold, avg)
+    tsm[8888] = { rate, sold, avg }
+    ES.Market.ClearTSM()
+    local res = { learnable = {} }
+    ES.Earn.AddLearnable(res, { cost = 100, profit = 2000, sellWhere = "ah", itemID = 8888, ahPrice = 500, learn = 1 }, "Tailoring", 150, 1000)
+    return #res.learnable == 1
+  end
+  assert(Learnable(0.6, 40, 500), "TSM bien: se propone aprenderla")
+  assert(not Learnable(0.55, 0.82, 4888), "poca demanda: no se propone aprenderla")
+  assert(not Learnable(0.6, 40, 100), "venta media de TSM muy por debajo: no se propone aprenderla")
+  -- Umbrales elegidos por el jugador: con 0, ese criterio no cuenta
+  ES.db.tsmMinSold = 0
+  assert(Learnable(0.55, 0.82, 500), "sin mínimo de vendidos al día: la de 0,82 al día vale")
+  ES.db.tsmMinSold, ES.db.tsmMinRate = 5, 0
+  tsm[8888] = { 0.01, 3, 500 }
+  ES.Market.ClearTSM()
+  s = ES.Market:Signals(8888)
+  assert(s.demand.flag, "mínimo 5 al día: 3 al día en contra")
+  ES.db.tsmMinSold = 2
+  assert(not ES.Market:Signals(8888).demand.flag, "mínimo 2 al día y tasa sin mínimo: 3 al día con tasa 0,01 vale")
+  ES.db.tsmMinSold, ES.db.tsmMinRate = nil, nil
   -- Opción quitada: como sin TSM
   ES.db.noTsmDemand = true
   ES.Market.ClearTSM()
@@ -4022,6 +4047,29 @@ step("calculadora: desglose en crudo, precios a mano y cálculos guardados", fun
   Calc:Select(c.id)
   ES:RenderCalculator()
   assert(page.saved[1]._shown and page.saved[2]._shown, "dos cálculos guardados en la lista")
+  -- Muchos materiales: las filas van en su marco desplazable y el resumen no se sale
+  -- del panel (antes empujaban el beneficio y los botones hacia abajo)
+  do
+    local savedH, savedW = page.sheet.GetHeight, page.sheet.GetWidth
+    page.sheet.GetHeight = function() return 330 end  -- (poco alto: no caben todas)
+    page.sheet.GetWidth = function() return 500 end
+    local rowsH, scrollH
+    local realSet, realScrollSet = page.rowsChild.SetHeight, page.rowsScroll.SetHeight
+    page.rowsChild.SetHeight = function(self, h) rowsH = h end
+    page.rowsScroll.SetHeight = function(self, h) scrollH = h end
+    ES:RenderCalculator()
+    assert(rowsH and scrollH and scrollH <= rowsH, "lo que se ve no pasa de las filas")
+    if rowsH > 330 - 78 - 160 - 38 then
+      assert(page.rowsScroll.overflow and scrollH < rowsH, "con poco alto, las filas se desplazan")
+    end
+    page.sheet.GetHeight = function() return 2000 end -- (mucho alto: caben todas, como antes)
+    ES:RenderCalculator()
+    assert(not page.rowsScroll.overflow and scrollH == rowsH, "si caben, se ven todas sin desplazar")
+    page.rowsChild.SetHeight, page.rowsScroll.SetHeight = realSet, realScrollSet
+    page.sheet.GetHeight, page.sheet.GetWidth = savedH, savedW
+    log[#log+1] = string.format("     calculadora: %d px de filas", rowsH)
+    ES:RenderCalculator()
+  end
   -- Ratón sobre el icono de un cálculo o de un material: el tooltip del objeto
   do
     local savedLink, link = GameTooltip.SetHyperlink, nil
@@ -4657,7 +4705,30 @@ step("opciones: engranaje de la cabecera y categorías", function()
   pc._scripts.OnClick(pc)
   assert(ES.db.noPostConfirm == nil, "marcada otra vez, se quita")
   ES.db.noPostConfirm = savedPC
+  -- Ganar dinero: los umbrales de TSM son deslizadores por escalones
+  ES:OpenOptions("earn")
+  local sold, rate, tsmCb
+  for _, cb in ipairs(w.pages.earn.checks) do
+    if cb.option.key == "tsmMinSold" then sold = cb elseif cb.option.key == "tsmMinRate" then rate = cb
+    elseif cb.option.key == "noTsmDemand" then tsmCb = cb end
+  end
+  assert(sold and sold.isSlider and rate and rate.isSlider, "los umbrales de TSM, en Ganar dinero y como deslizadores")
+  assert(sold.value._text == string.format(ES.L["%s al día"], "1") and rate.value._text == "0,15",
+    "por defecto: 1 al día y tasa 0,15: " .. tostring(sold.value._text) .. " / " .. tostring(rate.value._text))
+  assert(sold.Set(1) and ES.db.tsmMinSold == 0 and ES.Market.TSMMinSold() == 0, "escalón 1: 0 (no cuenta)")
+  assert(sold.value._text == ES.L["No cuenta"], "con 0 dice que no cuenta: " .. tostring(sold.value._text))
+  assert(sold.Set(6) and ES.db.tsmMinSold == 5, "escalón 6: 5 al día")
+  assert(sold.Set(4) and ES.db.tsmMinSold == nil, "el de por defecto no se guarda")
+  assert(not sold.Set(4), "el mismo escalón no recalcula")
+  -- Sin la demanda de TSM, en gris (y se repinta la página al quitarla)
+  tsmCb:SetChecked(false)
+  tsmCb._scripts.OnClick(tsmCb)
+  assert(ES.db.noTsmDemand == true and not sold.option.enabled(), "sin TSM, los umbrales no cuentan")
+  tsmCb:SetChecked(true)
+  tsmCb._scripts.OnClick(tsmCb)
+  assert(ES.db.noTsmDemand == nil and sold.option.enabled(), "con TSM otra vez, se pueden tocar")
   -- /cj opciones abre la ventana (en la última categoría); OpenOptions con categoría, en esa
+  ES:OpenOptions("auction")
   w:Hide()
   SlashCmdList.CRAFTERSJOURNAL("opciones")
   assert(w._shown == true and w.selected == "auction", "/cj opciones abre la ventana")
@@ -4699,7 +4770,28 @@ step("asistente: banner, nivel y flechas", function()
     A.Update()
     local f, st = A.Frame(), A.State()
     assert(f._shown, "con una ruta empezada el asistente debería verse")
-    assert(f.banner.level._text == "226–230", "falta el nivel del paso: " .. tostring(f.banner.level._text))
+    assert(tostring(f.banner.level._text):gsub("\n", "") == "226–230", "falta el nivel del paso: " .. tostring(f.banner.level._text))
+    -- El nivel siempre cabe en su columna: si no, letra pequeña y, si aún no, en dos líneas
+    do
+      local fs = f.banner.level
+      local savedFonts = { GameFontNormal, GameFontNormalSmall }
+      GameFontNormal, GameFontNormalSmall = GameFontNormal or { "normal" }, GameFontNormalSmall or { "small" }
+      local savedW, font = fs.GetStringWidth, nil
+      local savedFont = fs.SetFontObject
+      fs.SetFontObject = function(self, o) font = o end
+      fs.GetStringWidth = function() return 30 end
+      A.FitLevel(fs, "226–230")
+      assert(font == GameFontNormal and fs._text == "226–230", "si cabe, con la letra normal y en una línea")
+      fs.GetStringWidth = function() return font == GameFontNormal and 56 or 40 end
+      A.FitLevel(fs, "226–230")
+      assert(font == GameFontNormalSmall and fs._text == "226–230", "si no cabe, letra más pequeña")
+      fs.GetStringWidth = function() return 60 end
+      A.FitLevel(fs, "1226–1230")
+      assert(fs._text == "1226\n–1230", "si aún no cabe, el rango en dos líneas: " .. tostring(fs._text))
+      fs.GetStringWidth, fs.SetFontObject = savedW, savedFont
+      GameFontNormal, GameFontNormalSmall = savedFonts[1], savedFonts[2]
+      A.Update()
+    end
     assert(f.banner.title._text == "Fabrica 4× Brightcloth Robe", "título: " .. tostring(f.banner.title._text))
     assert(f.banner.sub._text == "4 fabricaciones · ~4 min", "el asistente no debería enseñar precios: " .. tostring(f.banner.sub._text))
     assert(#st.steps == 3 and st.index == 2, "pasos del asistente (sin el total)")
@@ -4721,8 +4813,28 @@ step("asistente: banner, nivel y flechas", function()
     -- Acabar un paso (el actual pasa al siguiente): brillo y ✓
     local savedLines = ES.RouteLines
     ES.RouteLines = function() local l = savedLines() l[2].current, l[2].done, l[3].current = nil, true, true return l end
+    -- (con la espera de verdad: el ✓ sale sobre el paso hecho, que sigue a la vista, y
+    -- el siguiente entra al acabar; antes caía encima del nuevo, "Compra 10× Gold Bar ✓")
+    local savedHold, savedAfter, later = A.CELEBRATE_HOLD, C_Timer.After, nil
+    A.CELEBRATE_HOLD = 1
+    C_Timer.After = function(_, fn) later = fn end
+    local before = f.banner.title._text
     A.Update()
     assert(st.index == 3 and st.celebrated, "al acabar un paso debería celebrarse")
+    assert(f.banner.title._text == before and later, "mientras se celebra, se ve el paso hecho")
+    A.Update() -- (lo que llegue entretanto espera)
+    assert(f.banner.title._text == before, "lo que llega durante la celebración espera")
+    -- Un clic mientras tanto no vuelve a hacer el paso hecho: solo enseña el siguiente
+    local did = false
+    local savedClick = f.banner.onClick
+    f.banner.onClick = function() did = true end
+    f.banner._scripts.OnClick(f.banner, "LeftButton")
+    assert(not did, "un clic durante la celebración no repite el paso hecho")
+    assert(f.banner.title._text ~= before and st.hold == nil, "el clic enseña el paso siguiente")
+    if f.banner.onClick == nil then f.banner.onClick = savedClick end
+    later() -- (el temporizador ya no hace nada)
+    assert(f.banner.title._text ~= before, "al acabar, el paso siguiente")
+    A.CELEBRATE_HOLD, C_Timer.After = savedHold, savedAfter
     ES.RouteLines = savedLines
     A.Update()
     assert(not st.celebrated, "volver a un paso anterior no se celebra")
@@ -4973,9 +5085,54 @@ step("ruta: filas de compra (paran al empezar el tramo o sin poder fabricar)", f
     assert(warned, "la fila del material desorbitado debería avisar")
     assert(buys[1] and cur == buys[1], "al empezar el tramo sin materiales, el paso actual debería ser comprar: " .. tostring(cur and cur.title))
     local buy = ES.RouteBuy(plan, "Leatherworking", level, { phase = true })
+    -- Cada fila de compra lleva icono (el del objeto, o el de la AH, el vendedor o el banco)
+    for _, b in ipairs(buys) do assert(b.icon ~= nil, "fila de compra sin icono: " .. tostring(b.buyRow)) end
     local listed = 0
     for _, b in ipairs(buys) do listed = listed + #b.buyItems end
     assert(listed == #buy.ah + #buy.vendor, "las filas de compra no piden lo mismo que la vista Materiales")
+    -- Lo ya convertido cuenta como su material (Discord: al pasar Runecloth a Bolt of
+    -- Runecloth, la fila volvía a pedir comprar Runecloth)
+    do
+      local mid, raw, per
+      for _, c in ipairs(plan.crafted or {}) do
+        local r = c.recipe
+        if not mid and r and r.r and r.r[1] and r.out and buy.need[r.r[1][1]] then
+          mid, raw, per = c.itemID, r.r[1][1], r.r[1][2] / math.max(1, r.out[2] or 1)
+        end
+      end
+      if mid then
+        local savedCount = ES.ItemCount
+        ES.ItemCount = function(_, id) if id == mid then return 4 end return 0 end
+        local b2 = ES.RouteBuy(plan, "Leatherworking", level, { phase = true })
+        assert(b2.Have(raw) >= math.floor(4 * per + 0.001), string.format("4 intermedios cuentan como %d de su material: %d", math.floor(4 * per), b2.Have(raw)))
+        local before, after = 0, 0
+        for _, it in ipairs(buy.ah) do if it.itemID == raw then before = it.quantity end end
+        for _, it in ipairs(buy.vendor) do if it.itemID == raw then before = it.quantity end end
+        for _, it in ipairs(b2.ah) do if it.itemID == raw then after = it.quantity end end
+        for _, it in ipairs(b2.vendor) do if it.itemID == raw then after = it.quantity end end
+        assert(after <= math.max(0, before - math.floor(4 * per + 0.001)), "comprar menos: " .. before .. " -> " .. after)
+        ES.ItemCount = savedCount
+        log[#log+1] = string.format("     convertido: 4 de %d = %s de %d", mid, ES.Num(4 * per), raw)
+        -- Lo que gasta la ruta de ese intermedio, desde tu nivel: desde el principio, lo
+        -- de toda la ruta; según subes, menos (Discord: en 229 seguía pidiendo los 20
+        -- Bolt of Runecloth del 226)
+        local total
+        for _, c in ipairs(plan.crafted) do if c.itemID == mid then total = c.quantity end end
+        local full = ES.Planner.CraftedNeedFrom(plan, mid, plan.from)
+        assert(full and math.abs(math.ceil(full - 0.001) - total) <= 1,
+          string.format("desde el principio, lo de toda la ruta: %s frente a %d", tostring(full), total))
+        local prev, lastUse = full, plan.from
+        for s = plan.from, (plan.reached or plan.to) - 1 do
+          local now = ES.Planner.CraftedNeedFrom(plan, mid, s)
+          assert(now <= prev + 1e-6, "según subes, nunca más")
+          if now > 0 then lastUse = s end
+          prev = now
+        end
+        assert(ES.Planner.CraftedNeedFrom(plan, mid, lastUse + 1) == 0, "pasado el último nivel que lo gasta, nada")
+      else
+        log[#log+1] = "     (la ruta de prueba no fabrica intermedios del tramo)"
+      end
+    end
     assert(buys[1].go and not buys[1].onClick, "sin la AH ni el vendedor abiertos, el clic marca el camino")
     -- Solo el asistente: la vista Ruta de la ventana no tiene filas de compra (lo tiene en
     -- Materiales y la Lista de compra) y su paso actual sigue siendo el suyo
@@ -5002,9 +5159,32 @@ step("ruta: filas de compra (paran al empezar el tramo o sin poder fabricar)", f
     -- Con la AH abierta, el clic abre la compra
     ES.IsAuctionHouseOpen = function() return true end
     local _, buysAH = Lines()
+    local ahRow
     for _, b in ipairs(buysAH) do
-      if b.buyRow == "ah" then assert(b.onClick and not b.go, "con la AH abierta, el clic debería abrir la compra") end
+      if b.buyRow == "ah" then assert(b.onClick and not b.go, "con la AH abierta, el clic debería abrir la compra") ahRow = b end
     end
+    -- En la AH, una fila por material: su clic abre la compra de ese (con todos en una,
+    -- el clic siempre abría el primero y no se llegaba al segundo)
+    local savedBuy, opened = ES.OpenAuctionBuy, {}
+    ES.OpenAuctionBuy = function(_, id) opened[#opened + 1] = id end
+    local nAH = 0
+    for _, b in ipairs(buysAH) do
+      if b.buyRow == "ah" then
+        nAH = nAH + 1
+        assert(#b.buyItems == 1 and b.item == b.buyItems[1].itemID, "fila de la AH con un solo material")
+        b.onClick()
+        assert(opened[#opened] == b.buyItems[1].itemID, "el clic abre la compra de su material")
+      end
+    end
+    ES.OpenAuctionBuy = savedBuy
+    local blockers = 0
+    for _, b in ipairs(buysAH) do if b.current then blockers = blockers + 1 end end
+    assert(blockers <= 1, "solo una fila de compra es el paso actual")
+    -- El reparto: banco y vendedor en una fila; en la AH, una por material
+    local g = ES.UI.BuyGroups({ bank = { { itemID = 1 } }, ah = { { itemID = 2 }, { itemID = 3 } }, vendor = { { itemID = 4 }, { itemID = 5 } } })
+    assert(#g == 4 and g[1][1] == "bank" and g[2][1] == "ah" and g[2][2][1].itemID == 2 and #g[2][2] == 1
+      and g[3][2][1].itemID == 3 and g[4][1] == "vendor" and #g[4][2] == 2, "filas: banco, una por material de la AH, vendedor")
+    log[#log+1] = string.format("     compra en la AH: %d filas, una por material", nAH)
     ES.IsAuctionHouseOpen = function() return false end
     -- Con todo comprado: ni filas de compra ni nada que pare
     ES.ItemCount = function() return 100000 end
@@ -5151,9 +5331,10 @@ step("ganar dinero: quitar recetas y enfriamientos", function()
     ES.IsRecipeKnown = function(self, id) local r = ES.Data.Leatherworking.recipes[id] return r ~= nil and r.fee ~= nil end
     ES.Earn:Clear()
     local res = ES.Earn:Ideas()
-    for _, list in ipairs({ res.ideas, res.vendor, res.learnable }) do
-      for _, idea in ipairs(list) do
-        assert(not ES.Planner.Cooldown(idea.e.recipe, idea.e.id), "una receta con enfriamiento en Ganar dinero: " .. idea.e.recipe.name)
+    -- (las de enfriamiento: como mucho una, nunca un lote en serie)
+    for _, idea in ipairs(res.ideas) do
+      if ES.Planner.Cooldown(idea.e.recipe, idea.e.id) then
+        assert(idea.cooldown and idea.crafts <= 1, "enfriamiento en serie en Ganar dinero: " .. idea.e.recipe.name)
       end
     end
     local idea = res.ideas[1] or res.vendor[1] or res.learnable[1]
@@ -5177,6 +5358,159 @@ step("ganar dinero: quitar recetas y enfriamientos", function()
   end)
   ES.GetProfessionSkill, ES.IsRecipeKnown = realSkill, realKnown
   ES.db.earnHidden = nil
+  ES.Earn:Clear()
+  if not ok then error(err, 0) end
+end)
+-- Quién vende cada material en Forever (Data/MatVendors.lua) manda sobre
+-- QuestieDB, que da los de Classic (Discord: mandaba a Edna Mullby a por Rune Thread)
+step("vendedores de materiales: los de Forever", function()
+  local RUNE, EDNA, ALEXANDRA = 14341, 1286, 1347
+  assert(ES.Data.MatVendors and ES.Data.MatVendors[RUNE], "faltan los vendedores de materiales de Forever")
+  local list = ES.Waypoints.Vendors(RUNE)
+  local has = {}
+  for _, id in ipairs(list) do has[id] = true end
+  assert(not has[EDNA], "Edna Mullby no vende Rune Thread en Forever")
+  assert(has[ALEXANDRA], "Alexandra Bolero sí")
+  for _, id in ipairs(list) do
+    assert(ES.Waypoints.NPC(id), "cada vendedor de la lista sabe dónde está: " .. id)
+  end
+  -- Lo que no está en esa lista sigue con los de QuestieDB
+  local other
+  for itemID, src in pairs(ES.Data.ItemSources or {}) do
+    if src.v and src.v[1] and not ES.Data.MatVendors[itemID] then other = other or itemID end
+  end
+  if other then assert(#ES.Waypoints.Vendors(other) > 0, "lo demás, con los vendedores de siempre") end
+  local n = 0
+  for _ in pairs(ES.Data.MatVendors) do n = n + 1 end
+  log[#log+1] = string.format("     vendedores de materiales: %d materiales, Rune Thread %d vendedores", n, #list)
+end)
+-- Con el vendedor abierto, la fila de compra del asistente compra justo lo que falta,
+-- en los lotes del vendedor; lo que este vendedor no tiene, aparte
+step("vendedor abierto: comprar justo lo que falta", function()
+  local saved = { num = GetMerchantNumItems, iid = GetMerchantItemID,
+    info = GetMerchantItemInfo, cmf = C_MerchantFrame, buy = ES.VendorShop.Buy, money = GetMoney }
+  local ok, err = pcall(function()
+    local RUNE, COARSE = 14341, 2320
+    local stock = { COARSE, 2321 }
+    GetMerchantNumItems = function() return #stock end
+    GetMerchantItemID = function(i) return stock[i] end
+    C_MerchantFrame = nil
+    GetMerchantItemInfo = function(i) return nil, nil, 100, 5, -1, true, nil, false end
+    GetMoney = function() return 1e9 end
+    local bought = {}
+    ES.VendorShop.Buy = function(self, e) bought[#bought + 1] = e end
+    local b, m = ES.VendorShop:BuyExact({ { itemID = COARSE, quantity = 7 }, { itemID = RUNE, quantity = 2 } })
+    assert(#b == 1 and b[1].itemID == COARSE and b[1].qty == 10 and #bought == 1, "7 de 5 en 5: 10")
+    assert(#m == 1 and m[1].itemID == RUNE, "lo que no tiene, aparte")
+  end)
+  GetMerchantNumItems, GetMerchantItemID = saved.num, saved.iid
+  GetMerchantItemInfo, C_MerchantFrame, ES.VendorShop.Buy, GetMoney = saved.info, saved.cmf, saved.buy, saved.money
+  if not ok then error(err, 0) end
+end)
+-- En combate el juego bloquea que los clics del icono pasen a la fila (0.58.0:
+-- ADDON_ACTION_BLOCKED al abrir una ruta peleando): se deja para cuando acabe
+step("iconos de las filas: en combate no se toca lo bloqueado", function()
+  local savedLock = InCombatLockdown
+  local calls = 0
+  local fake = { SetMouseClickEnabled = function() calls = calls + 1 end, SetPropagateMouseClicks = function() calls = calls + 1 end }
+  InCombatLockdown = function() return true end
+  ES.UI.PassClicks(fake)
+  assert(calls == 0, "en combate no se llama a SetPropagateMouseClicks")
+  InCombatLockdown = function() return false end
+  FireEvent("PLAYER_REGEN_ENABLED")
+  assert(calls == 2, "al acabar el combate se aplica: " .. calls)
+  FireEvent("PLAYER_REGEN_ENABLED")
+  assert(calls == 2, "solo una vez")
+  InCombatLockdown = savedLock
+end)
+-- Enfriamientos en el lote: lista (o sin saber) y en la AH, 1 fabricación delante;
+-- en marcha, fuera del lote y en su sección; al pasar el tiempo, vuelve sola
+step("ganar dinero: enfriamientos listos en el lote", function()
+  local saved = { skill = ES.GetProfessionSkill, known = ES.IsRecipeKnown, min = ES.db.earnMinProfit,
+    cd = ES.charData.cdReady, tsui = C_TradeSkillUI, now = NOW,
+    market = ES.Planner.RecipeMarket, cost = ES.Planner.RecipeCost }
+  local r
+  local ok, err = pcall(function()
+    local LW = ES.Data.Leatherworking
+    ES.GetProfessionSkill = function(self, line) if line == LW.skillLine then return 150, 225 end end
+    ES.IsRecipeKnown = function(self, id) local x = LW.recipes[id] return x ~= nil and x.fee ~= nil end
+    ES.db.earnMinProfit = 0
+    ES.charData.cdReady = nil
+    -- (los precios de prueba no dejan beneficio: dos recetas que sí, una con enfriamiento)
+    local ids = {}
+    for rid, x in pairs(LW.recipes) do if x.fee and x.out then ids[#ids + 1] = rid end end
+    table.sort(ids)
+    local id, other = ids[1], ids[2]
+    r = LW.recipes[id]
+    r.cd = true -- (Planner.Cooldown: los datos mandan)
+    ES.Earn.ResetCooldownRecipes()
+    local function Entry(rid, item, profit)
+      return { id = rid, recipe = LW.recipes[rid], itemID = item, learnSource = "known", cost = 1000, profit = profit,
+        sellWhere = "ah", ahNet = 1000 + profit, ahMin = 1100 + profit, qty = 1, quantity = 20, listings = 5, cut = 0.05, reagents = {} }
+    end
+    ES.Planner.RecipeMarket = function(self, data)
+      if data ~= LW then return {}, { supply = {}, used = {} } end
+      return { Entry(other, 990002, 90000), Entry(id, 990001, 5000) }, { supply = {}, used = {} }
+    end
+    ES.Planner.RecipeCost = function(ctx, recipe, n) return 1000 * n, {}, {}, nil end
+    ES.Earn:Clear()
+    local function Find(res)
+      for _, i in ipairs(res.ideas) do if i.e.id == id then return i end end
+    end
+    -- Sin saber si está lista: entra, con 1 fabricación, delante y avisando
+    ES.Earn:Clear(true)
+    local res = ES.Earn:Ideas()
+    local cd = Find(res)
+    assert(cd and cd.cooldown and cd.cdUnknown and cd.crafts == 1, "enfriamiento sin saber: 1 fabricación en el lote")
+    assert(res.ideas[1].e.id == id or res.ideas[1].custom, "el enfriamiento va delante")
+    assert(cd.inBatch, "el enfriamiento entra en el lote")
+    -- En marcha (2 h): fuera del lote y en la sección con lo que falta
+    NOW = time()
+    ES.charData.cdReady = { [id] = NOW + 7200 }
+    ES.Earn:Clear(true)
+    res = ES.Earn:Ideas()
+    assert(not Find(res), "enfriamiento en marcha: fuera del lote")
+    local found
+    for _, c in ipairs(ES.Earn:Cooldowns()) do if c.id == id then found = c end end
+    assert(found and not found.ready and not found.unknown and found.left > 7000, "sección: en marcha, con lo que falta")
+    -- Pasa el tiempo: vuelve al lote sin vaciar nada a mano
+    NOW = NOW + 7300
+    res = ES.Earn:Ideas()
+    cd = Find(res)
+    assert(cd and cd.cooldown and not cd.cdUnknown and cd.crafts == 1, "enfriamiento ya listo: vuelve al lote")
+    for _, c in ipairs(ES.Earn:Cooldowns()) do if c.id == id then found = c end end
+    assert(found.ready and found.inBatch, "sección: listo y en el lote")
+    ES:SelectPage("money")
+    ES:RenderEarn() -- (filas del lote y de la sección, con su clic)
+    ES:SelectPage("home")
+    -- Con la profesión abierta se lee del juego (C_TradeSkillUI.GetRecipeCooldown)
+    C_TradeSkillUI = { GetRecipeCooldown = function(rid) if rid == id then return 3600, true, 0, 0 end end }
+    assert(ES.Earn.ReadCooldowns("Leatherworking"), "leer el enfriamiento de la profesión abierta")
+    assert(ES.charData.cdReady[id] == NOW + 3600, "se guarda cuándo estará lista")
+    ES.Earn:Clear(true)
+    assert(not Find(ES.Earn:Ideas()), "leído en marcha: fuera del lote")
+    C_TradeSkillUI = { GetRecipeCooldown = function() return nil, true, 0, 0 end }
+    assert(ES.Earn.ReadCooldowns("Leatherworking") and ES.Earn.CooldownLeft(id) == 0, "leído listo")
+    -- Para aprender (Mooncloth): sí, contando una fabricación cada vez
+    local lres = { learnable = {} }
+    local le = { cost = 1000, profit = 5000, sellWhere = "ah", itemID = 990001, ahPrice = 6000, learn = 1, learnCost = 20000 }
+    ES.Earn.AddLearnable(lres, le, "Leatherworking", 150, 1000, true)
+    assert(#lres.learnable == 1 and lres.learnable[1].cooldown and lres.learnable[1].payback == 4,
+      "enfriamiento para aprender: se propone y se recupera en 4")
+    lres = { learnable = {} }
+    ES.Earn.AddLearnable(lres, le, "Leatherworking", 150, 10000, true)
+    assert(#lres.learnable == 0, "enfriamiento para aprender: una sola por debajo del mínimo no se propone")
+    lres = { learnable = {} }
+    ES.Earn.AddLearnable(lres, { cost = 1000, profit = 5000, sellWhere = "vendor", itemID = 990001, vendor = 6000, learn = 1 },
+      "Leatherworking", 150, 1000, true)
+    assert(#lres.learnable == 0, "enfriamiento al vendedor: no se propone aprender")
+    log[#log+1] = "     enfriamiento en el lote: " .. r.name
+  end)
+  if r then r.cd = nil end
+  ES.Earn.ResetCooldownRecipes()
+  ES.Planner.RecipeMarket, ES.Planner.RecipeCost = saved.market, saved.cost
+  ES.GetProfessionSkill, ES.IsRecipeKnown, ES.db.earnMinProfit = saved.skill, saved.known, saved.min
+  ES.charData.cdReady, C_TradeSkillUI, NOW = saved.cd, saved.tsui, saved.now
   ES.Earn:Clear()
   if not ok then error(err, 0) end
 end)

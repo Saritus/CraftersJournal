@@ -267,7 +267,7 @@ function Earn.CostIdea(idea)
   end
   local haveCrafts = math.floor(idea.have / math.max(1, e.qty))
   local n = math.max(0, idea.wanted - haveCrafts)
-  idea.why2 = haveCrafts > 0 and string.format(L["Ya tienes %d: se fabrican solo las que faltan."], idea.have) or nil
+  idea.why2 = haveCrafts > 0 and not idea.cooldown and string.format(L["Ya tienes %d: se fabrican solo las que faltan."], idea.have) or nil
   if n == 0 then
     idea.crafts, idea.invest, idea.profit, idea.reagents, idea.extra = 0, 0, 0, {}, {}
     idea.seconds, idea.gph = 0, nil
@@ -420,15 +420,23 @@ local LEARN_VENDOR_CRAFTS = 20
 -- margen que las que sabes y, con lo más que se fabricaría en una línea (MAX_BATCH;
 -- al vendedor, LEARN_VENDOR_CRAFTS), llega al mínimo. Lo que cuesta aprenderla no se resta:
 -- se dice en cuántas fabricaciones se paga
-function Earn.AddLearnable(res, e, profKey, rank, minLine)
+-- `cooldown`: receta con enfriamiento (Mooncloth): una al día, así que se cuenta 1
+-- fabricación y lo que cuesta aprenderla se recupera en días
+function Earn.AddLearnable(res, e, profKey, rank, minLine, cooldown)
   if not (e.cost and e.profit and e.profit >= math.max(MIN_PROFIT, e.cost * MIN_MARGIN)) then return end
+  if cooldown and e.sellWhere ~= "ah" then return end
   local idea = { e = e, profKey = profKey, itemID = e.itemID, sellWhere = e.sellWhere, learnable = true,
-    need = e.learn or 1, rank = rank }
+    need = e.learn or 1, rank = rank, cooldown = cooldown or nil }
   if idea.sellWhere == "ah" then
-    idea.verdict = ES.Market:Signals(e.itemID).verdict
+    local s = ES.Market:Signals(e.itemID)
+    idea.verdict = s.verdict
     if idea.verdict == "avoid" then return end
+    -- Aprenderla cuesta oro: con TSM, ni las que se venden poco en la región ni las que
+    -- allí se venden muy por debajo del precio con el que contamos (Discord: Frost
+    -- Tunic, 0,82 al día y 48s de media frente a 3g50)
+    if s.demand.flag or ES.Market.TSMLowPrice(s, e.ahPrice or e.ahMin) then return end
   end
-  if e.profit * (idea.sellWhere == "ah" and MAX_BATCH or LEARN_VENDOR_CRAFTS) < minLine then return end
+  if e.profit * (cooldown and 1 or idea.sellWhere == "ah" and MAX_BATCH or LEARN_VENDOR_CRAFTS) < minLine then return end
   idea.canLearn = rank >= idea.need
   idea.payback = (e.learnCost or 0) > 0 and math.ceil(e.learnCost / e.profit) or nil
   res.learnable[#res.learnable + 1] = idea
@@ -466,7 +474,8 @@ function Earn:Ideas()
   local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
   local minLine = Earn.MinLineProfit()
   local stamp = table.concat({ scan and scan.time or 0, ES:RealmKey(), ES.repStamp or "", minLine }, ":")
-  if cache and cache.stamp == stamp then return cache end
+  -- (y si una con enfriamiento ya está lista desde entonces, otra vez)
+  if cache and cache.stamp == stamp and not (cache.cdNext and time() >= cache.cdNext) then return cache end
   local res = { stamp = stamp, ideas = {}, avoided = {}, vendor = {}, learnable = {}, scanTime = scan and scan.time, profs = Earn.MyProfessions(), known = 0,
     minLine = minLine, hidden = 0, removed = 0, cdProfit = {} }
   for _, profKey in ipairs(res.profs) do
@@ -475,17 +484,24 @@ function Earn:Ideas()
     local entries, ctx = RecipeMarketFor(profKey, data, scan)
     for _, e in ipairs(entries) do
       -- Recetas con enfriamiento (transmutaciones, tela lunar): una al día, no un lote de
-      -- 20. Van en su sección (Enfriamientos), con su beneficio
+      -- 20. Si está lista (o no se sabe) y se vende en la AH, entra en el lote con 1
+      -- fabricación; en marcha, solo en su sección (Enfriamientos)
       local cooldown = e.recipe and ES.Planner.Cooldown(e.recipe, e.id)
+      local cdLeft = cooldown and Earn.CooldownLeft(e.id)
       if cooldown and e.profit then res.cdProfit[e.id] = e.profit end
+      local usable = not cooldown or (e.sellWhere == "ah" and not (cdLeft and cdLeft > 0))
+      if cooldown and cdLeft and cdLeft > 0 then
+        res.cdNext = math.min(res.cdNext or math.huge, time() + math.ceil(cdLeft))
+      end
       if Earn.IsHidden(e.id) then
         res.removed = res.removed + 1
       elseif LEARNABLE[e.learnSource] then
-        if not cooldown then Earn.AddLearnable(res, e, profKey, rank, minLine) end
+        Earn.AddLearnable(res, e, profKey, rank, minLine, cooldown)
       elseif e.learnSource == "known" then
         res.known = res.known + 1
-        if not cooldown and e.cost and e.profit and e.profit >= math.max(MIN_PROFIT, e.cost * MIN_MARGIN) then
-          local idea = { e = e, profKey = profKey, itemID = e.itemID, sellWhere = e.sellWhere, unitCost = e.cost }
+        if usable and e.cost and e.profit and e.profit >= math.max(MIN_PROFIT, e.cost * MIN_MARGIN) then
+          local idea = { e = e, profKey = profKey, itemID = e.itemID, sellWhere = e.sellWhere, unitCost = e.cost,
+            cooldown = cooldown or nil, cdUnknown = cooldown and cdLeft == nil or nil }
           if idea.sellWhere == "ah" then
             idea.signals = ES.Market:Signals(e.itemID)
             idea.verdict = idea.signals.verdict
@@ -493,11 +509,18 @@ function Earn:Ideas()
           end
           if idea.verdict == "avoid" then
             -- (sin costear: con lo más que se fabricaría, ¿llegaría al mínimo?)
-            if e.profit * MAX_BATCH >= minLine then
+            if e.profit * (cooldown and 1 or MAX_BATCH) >= minLine then
               res.avoided[#res.avoided + 1] = idea
             else
               res.hidden = res.hidden + 1
             end
+          elseif cooldown then
+            -- La de hoy: 1 fabricación aunque ya lleves alguna hecha (el enfriamiento se
+            -- pierde si no se usa), sin botones de cantidad
+            idea.ctx = ctx
+            idea.wanted = math.floor(ES:ItemCount(e.itemID) / math.max(1, e.qty)) + 1
+            idea.why = L["receta con enfriamiento, una cada vez."]
+            idea.sale = e.ahNet * e.qty
           else
             idea.ctx = ctx
             idea.wanted, idea.why = Batch(idea, e)
@@ -526,8 +549,10 @@ function Earn:Ideas()
     end
   end
   -- (las de cantidad elegida por ti, delante: si no, al pulsar − podían salirse del lote)
+  -- (y las de enfriamiento listas: son una al día y ocupan poco, que no las desplacen)
   table.sort(res.ideas, function(a, b)
     if (a.custom or false) ~= (b.custom or false) then return a.custom == true end
+    if (a.cooldown or false) ~= (b.cooldown or false) then return a.cooldown == true end
     return a.score > b.score
   end)
   table.sort(res.avoided, function(a, b) return a.e.profit > b.e.profit end)
@@ -602,30 +627,151 @@ function Earn:Ideas()
   return res
 end
 
--- Recetas con enfriamiento (transmutaciones, tela lunar...) que sabes y están listas
-local COOLDOWN_NAMES = { "^Transmute", "Mooncloth" }
-function Earn:Cooldowns()
-  local list = {}
-  if not GetSpellCooldown then return list end
-  for _, profKey in ipairs(Earn.MyProfessions()) do
+---------------------------------------------------------------------------
+-- Enfriamientos (transmutaciones, tela lunar: Planner.Cooldown). ¿Está lista hoy?
+-- Forever da el enfriamiento de una receta con C_TradeSkillUI.GetRecipeCooldown (lo
+-- que usa TSM), pero solo es de fiar con su profesión abierta. Se lee al abrirla y al
+-- fabricar, y se guarda por personaje:
+--   ES.charData.cdReady[receta] = time() en que estará lista (pasada: lista)
+-- Con la profesión cerrada se mira también el enfriamiento del hechizo (si el juego lo
+-- da). Si nunca se ha visto, no se sabe: el lote la propone y lo dice (al pulsar la
+-- fila se abre la profesión y se sabe).
+---------------------------------------------------------------------------
+local function CDStore()
+  if type(ES.charData) ~= "table" then return nil end
+  if type(ES.charData.cdReady) ~= "table" then ES.charData.cdReady = {} end
+  return ES.charData.cdReady
+end
+
+-- Enfriamiento del hechizo de la receta: segundos que faltan, o nil si no da uno
+local function SpellCooldownLeft(id)
+  local start, duration
+  if C_Spell and C_Spell.GetSpellCooldown then
+    local ok, info = pcall(C_Spell.GetSpellCooldown, id)
+    if ok and type(info) == "table" then start, duration = info.startTime, info.duration end
+  elseif GetSpellCooldown then
+    local ok, s, d = pcall(GetSpellCooldown, id)
+    if ok then start, duration = s, d end
+  end
+  -- (más de 2 s: el tiempo global de lanzamiento no cuenta)
+  if type(start) == "number" and type(duration) == "number" and start > 0 and duration > 2 then
+    return math.max(0, start + duration - GetTime())
+  end
+end
+
+-- Segundos que faltan para poder fabricarla (0: lista) o nil si no se sabe
+function Earn.CooldownLeft(id)
+  local store = CDStore()
+  local spell = SpellCooldownLeft(id)
+  if spell and spell > 0 then
+    if store then store[id] = time() + math.floor(spell) end
+    return spell
+  end
+  local ready = store and store[id]
+  if not ready then return nil end
+  return math.max(0, ready - time())
+end
+
+-- Las recetas con enfriamiento de una profesión (son pocas y no cambian: una vez) y,
+-- de ellas, las que sabes: { [id] = receta }. (Antes se miraban todas las recetas de la
+-- profesión en cada TRADE_SKILL_LIST_UPDATE, que llega en cada fabricación)
+local cdRecipes = {}
+local function KnownCooldowns(profKey)
+  local all = cdRecipes[profKey]
+  if not all then
+    all = {}
     local data = ES.Data[profKey]
-    ES.Planner.Annotate(data)
-    for id, r in pairs(data.recipes) do
-      local isCd = false
-      for _, pat in ipairs(COOLDOWN_NAMES) do if (r.name or ""):find(pat) then isCd = true end end
-      if isCd and ES:IsRecipeKnown(id) then
-        local start, duration = GetSpellCooldown(id)
-        local left = (start and start > 0 and duration) and (start + duration - GetTime()) or 0
-        -- Beneficio de hacerlo, si está entre las ideas (o las descartadas por el mercado)
-        local profit = cache and cache.cdProfit and cache.cdProfit[id] -- (ya no entran en el lote)
-        for _, idea in ipairs(cache and cache.ideas or {}) do if idea.e.id == id then profit = idea.e.profit end end
-        for _, idea in ipairs(cache and cache.vendor or {}) do if idea.e.id == id then profit = idea.e.profit end end
-        for _, idea in ipairs(cache and cache.avoided or {}) do if idea.e.id == id then profit = idea.e.profit end end
-        list[#list + 1] = { recipe = r, id = id, profKey = profKey, ready = left <= 0, left = math.max(0, left), profit = profit }
-      end
+    for id, r in pairs(data and data.recipes or {}) do
+      if ES.Planner.Cooldown(r, id) then all[id] = r end
+    end
+    cdRecipes[profKey] = all
+  end
+  local list = {}
+  for id, r in pairs(all) do
+    if ES:IsRecipeKnown(id) then list[id] = r end
+  end
+  return list
+end
+function Earn.ResetCooldownRecipes() cdRecipes = {} end -- (pruebas: datos cambiados a mano)
+
+-- Con la profesión abierta: guarda el enfriamiento de sus recetas. true si cambió
+-- si alguna está lista o no
+function Earn.ReadCooldowns(profKey)
+  local T = C_TradeSkillUI
+  local store = CDStore()
+  if not (profKey and store and T and T.GetRecipeCooldown) then return false end
+  local now, changed = time(), false
+  for id in pairs(KnownCooldowns(profKey)) do
+    local ok, cd, _, charges, maxCharges = pcall(T.GetRecipeCooldown, id)
+    if ok then
+      if (maxCharges or 0) > 0 and (charges or 0) > 0 then cd = nil end -- (con cargas: lista)
+      local ready = now + math.floor(cd or 0)
+      local was = store[id]
+      if was == nil or (was > now) ~= (ready > now) then changed = true end
+      store[id] = ready
     end
   end
-  table.sort(list, function(a, b) return a.left < b.left end)
+  return changed
+end
+
+do
+  local f = CreateFrame("Frame")
+  local pendingRead = false
+  local function Read()
+    local prof = ES.CraftWindow and ES.CraftWindow.OpenProfession and ES.CraftWindow.OpenProfession()
+    if prof and Earn.ReadCooldowns(prof) then
+      Earn:Clear(true)
+      if ES.RenderEarn then pcall(ES.RenderEarn, ES) end
+      if ES.CraftWindow and ES.CraftWindow.Refresh then pcall(ES.CraftWindow.Refresh, ES.CraftWindow) end
+    end
+  end
+  ES.SafeRegister(f, "TRADE_SKILL_SHOW")
+  ES.SafeRegister(f, "TRADE_SKILL_LIST_UPDATE")
+  ES.SafeRegister(f, "UNIT_SPELLCAST_SUCCEEDED")
+  f:SetScript("OnEvent", function(_, event, unit, _, spellID)
+    if event == "UNIT_SPELLCAST_SUCCEEDED" then
+      -- Fabricaste una con enfriamiento: ya no está lista (el juego tarda un poco en dar
+      -- el enfriamiento nuevo: se vuelve a leer después)
+      if unit ~= "player" or not spellID then return end
+      local store = CDStore()
+      local r
+      for _, p in ipairs(ES.PROFESSIONS or {}) do
+        r = r or (ES.Data[p.key] and ES.Data[p.key].recipes and ES.Data[p.key].recipes[spellID])
+      end
+      if not (r and store and ES.Planner.Cooldown(r, spellID)) then return end
+      store[spellID] = time() + 3600 -- (provisional, hasta leer el de verdad)
+      Earn:Clear(true)
+      if ES.RenderEarn then pcall(ES.RenderEarn, ES) end
+      if C_Timer then C_Timer.After(1, Read) end
+      return
+    end
+    -- (TRADE_SKILL_LIST_UPDATE llega muchas veces seguidas: una lectura para todas)
+    if not C_Timer then Read() return end
+    if pendingRead then return end
+    pendingRead = true
+    C_Timer.After(0.3, function() pendingRead = false Read() end)
+  end)
+end
+
+-- Recetas con enfriamiento que sabes: cuándo están listas y qué dejan
+function Earn:Cooldowns()
+  local list = {}
+  local res = cache
+  for _, profKey in ipairs(Earn.MyProfessions()) do
+    for id, r in pairs(KnownCooldowns(profKey)) do
+      local left = Earn.CooldownLeft(id)
+      local inBatch = false
+      for _, idea in ipairs(res and res.batch or {}) do if idea.e.id == id then inBatch = true end end
+      list[#list + 1] = { recipe = r, id = id, profKey = profKey, ready = left == 0, unknown = left == nil,
+        left = left or 0, profit = res and res.cdProfit and res.cdProfit[id], inBatch = inBatch }
+    end
+  end
+  -- (listas primero; luego las que antes estarán)
+  table.sort(list, function(a, b)
+    if a.unknown ~= b.unknown then return not a.unknown end
+    if a.left ~= b.left then return a.left < b.left end
+    return (a.recipe.name or "") < (b.recipe.name or "")
+  end)
   return list
 end
 

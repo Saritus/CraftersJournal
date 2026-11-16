@@ -9,6 +9,7 @@ QuestieDB guarda sus datos "baked" en su .toc (Base64 + CBOR; los IDs con zlib).
 Uso:  python gen_sources.py
 """
 import csv
+import os
 import re
 import sys
 from pathlib import Path
@@ -19,6 +20,8 @@ from questie import (ITEM, NPC, NPC_AUCTIONEER, NPC_INNKEEPER, QUEST, all_ids, a
 
 HERE = Path(__file__).resolve().parent
 ADDON = HERE.parent
+# Datos de Forever que no van en el repositorio: su carpeta, junto al repositorio o en CJ_PRIVATE_DATA
+PRIVATE = Path(os.environ.get("CJ_PRIVATE_DATA") or (ADDON.parent / "CraftersJournal-private"))
 PROFS = ["Leatherworking", "Enchanting", "Tailoring", "Blacksmithing", "Alchemy", "Engineering", "Cooking", "FirstAid"]
 RANK_BOOKS = [16072, 16084]  # Expert Cookbook, Expert First Aid - Under Wraps
 
@@ -128,37 +131,36 @@ def main():
                          quest_asks(q, qr), len(quest_chain(q)))
             npcs_needed.update(starters)
 
-    # Vendedores de pergaminos de Forever (tools/forever/recipebook_*.csv, ver
-    # import_recipebook.py): se suman a los de QuestieDB, solo los que tienen sitio en el
-    # mapa. Un pergamino que en Forever no vende nadie (patrones de Spitfire, Ironvine...:
-    # no existen en Forever) se queda sin vendedor
-    book_npcs, book_vendors, limited = {}, {}, set()
-    if (HERE / "forever" / "recipebook_vendors.csv").exists():
-        with open(HERE / "forever" / "recipebook_npcs.csv", encoding="utf-8") as f:
+    # Vendedores de pergaminos de Forever (PRIVATE/forever_*.csv): se suman a los de
+    # QuestieDB, solo los que tienen sitio en el mapa. Un pergamino que en Forever no vende
+    # nadie (patrones de Spitfire, Ironvine...: no existen en Forever) se queda sin vendedor
+    fv_npcs, fv_vendors, limited = {}, {}, set()
+    if (PRIVATE / "forever_scroll_vendors.csv").exists():
+        with open(PRIVATE / "forever_npcs.csv", encoding="utf-8") as f:
             for r in csv.DictReader(l for l in f if not l.startswith("#")):
-                book_npcs[int(r["npc"])] = (r["name"], int(r["map"]), float(r["x"]), float(r["y"]))
-        with open(HERE / "forever" / "recipebook_vendors.csv", encoding="utf-8") as f:
+                fv_npcs[int(r["npc"])] = (r["name"], int(r["map"]), float(r["x"]), float(r["y"]))
+        with open(PRIVATE / "forever_scroll_vendors.csv", encoding="utf-8") as f:
             for r in csv.DictReader(l for l in f if not l.startswith("#")):
-                if int(r["npc"]) in book_npcs:
-                    book_vendors.setdefault(int(r["item"]), set()).add(int(r["npc"]))
+                if int(r["npc"]) in fv_npcs:
+                    fv_vendors.setdefault(int(r["item"]), set()).add(int(r["npc"]))
                     # "Limited (N)": vende N y se repone con el tiempo ("Unlimited": siempre hay)
                     if r["stock"].strip().startswith("Limited"):
                         limited.add((int(r["item"]), int(r["npc"])))
-        # Correcciones a los datos de Wowhead Forever, comprobadas en el juego.
-        # Raptor Hide Harness / Raptor Hide Belt: Wowhead (y el libro) los tienen al revés.
+        # Correcciones comprobadas en el juego.
+        # Raptor Hide Harness / Raptor Hide Belt: los datos los tienen al revés.
         # En el juego Tunkk (Horda, Hammerfall) vende el Belt y Androd Fadran (Alianza,
         # Refuge Pointe) la Harness, como en el Classic original (dos jugadores de la
         # Horda, Discord y CurseForge, 2026-11)
         VENDOR_FIXES = {13287: {2816}, 13288: {2819}}
         for item_id, npcs in VENDOR_FIXES.items():
-            if item_id in book_vendors:
-                was = book_vendors[item_id]
+            if item_id in fv_vendors:
+                was = fv_vendors[item_id]
                 for old, new in zip(sorted(was), sorted(npcs)):
                     if (item_id, old) in limited:
                         limited.add((item_id, new))
-                book_vendors[item_id] = set(npcs)
+                fv_vendors[item_id] = set(npcs)
         for item_id in scrolls:
-            book = book_vendors.get(item_id)
+            book = fv_vendors.get(item_id)
             vendors, qs = items.get(item_id, ([], []))
             if item_id in VENDOR_FIXES:
                 vendors = sorted(VENDOR_FIXES[item_id]) # (QuestieDB también lo tiene al revés)
@@ -172,10 +174,10 @@ def main():
                 items[item_id] = (vendors, qs)
             elif item_id in items:
                 del items[item_id]
-        # (y los instructores que solo conoce el libro: la ruta lleva a ellos, ver tr)
-        with open(HERE / "forever" / "recipebook_trainers.csv", encoding="utf-8") as f:
+        # (y los instructores de Forever que QuestieDB no conoce: la ruta lleva a ellos, ver tr)
+        with open(PRIVATE / "forever_trainers.csv", encoding="utf-8") as f:
             npcs_needed.update(int(r["npc"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))
-                               if int(r["npc"]) in book_npcs)
+                               if int(r["npc"]) in fv_npcs)
 
     # Subastadores (para "poner en la AH" desde la vista Profit) y posaderos: hay
     # uno en cada pueblo y, como cualquier vendedor, compran lo que fabricas
@@ -231,11 +233,11 @@ def main():
                 npcs[npc_id] = [npcs[npc_id][0], loc["side"], int(loc["map"]),
                                 round(float(loc["x"]) / 100, 4), round(float(loc["y"]) / 100, 4)]
                 fixed += 1
-    # PNJ de Forever que QuestieDB no tiene o no sitúa: los del libro (sin bando: los
-    # dos; el libro no lo dice)
+    # PNJ de Forever que QuestieDB no tiene o no sitúa: los de PRIVATE/forever_npcs.csv
+    # (sin bando: los dos; esos datos no lo dicen)
     for npc_id in sorted(npcs_needed):
-        if npc_id in book_npcs and (npc_id not in npcs or len(npcs[npc_id]) <= 2):
-            name, m, x, y = book_npcs[npc_id]
+        if npc_id in fv_npcs and (npc_id not in npcs or len(npcs[npc_id]) <= 2):
+            name, m, x, y = fv_npcs[npc_id]
             side = npcs[npc_id][1] if npc_id in npcs else ""
             npcs[npc_id] = [npcs[npc_id][0] if npc_id in npcs else name, side, m, round(x, 4), round(y, 4)]
             fixed += 1

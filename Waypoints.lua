@@ -169,7 +169,13 @@ end
 local function Item(itemID)
   if items[itemID] == nil then
     local baked = ES.Data.ItemSources and ES.Data.ItemSources[itemID]
-    if baked then
+    -- Materiales de profesión: quién los vende en Forever (Data/MatVendors.lua) manda
+    -- sobre QuestieDB, que da los de Classic (Discord: mandaba a Edna Mullby a por Rune
+    -- Thread, y en Forever no lo vende)
+    local mat = ES.Data.MatVendors and ES.Data.MatVendors[itemID]
+    if mat then
+      items[itemID] = { vendors = mat, quests = baked and baked.q or {} }
+    elseif baked then
       items[itemID] = { vendors = baked.v or {}, quests = baked.q or {} }
     elseif ES.Data.ItemSources and not Load() then
       items[itemID] = { vendors = {}, quests = {} } -- los datos propios no le conocen fuente

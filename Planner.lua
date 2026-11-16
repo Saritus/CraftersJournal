@@ -345,6 +345,20 @@ function Planner.RouteNeed(profKey, plan, level, opts)
   return out, nil
 end
 
+-- Cuántos de un intermedio (Bolt of Runecloth) gasta la ruta desde `level` hasta el
+-- final: lo que piden los niveles que te quedan, no los de toda la ruta. Con la ruta
+-- empezada y medio paso hecho (3 de 4 Brightcloth Robe) la fila seguía pidiendo los 20
+-- del principio (Discord). nil si el plan no lo sabe (sin pointUse)
+function Planner.CraftedNeedFrom(plan, itemID, level)
+  if not plan.pointUse then return nil end
+  local q = 0
+  for s = level, (plan.reached or plan.to or level) - 1 do
+    local u = plan.pointUse[s] and plan.pointUse[s][itemID]
+    if u then q = q + (u.craft or 0) end
+  end
+  return q
+end
+
 -- Cómo vas en el tramo con lo que llevas (have(itemID) = unidades):
 -- { phase, short = { [itemID] = cuántas faltan para lo esperado }, extra = { [itemID]
 --   = cuántas faltan hasta el colchón }, ok (llega a lo esperado) }

@@ -59,6 +59,9 @@ local function IdeaTooltip(idea)
         GameTooltip:AddLine(string.format(L["Fabrica %d: %s"], idea.crafts, idea.why or ""), 1, 0.82, 0, true)
       end
       if idea.why2 then GameTooltip:AddLine(idea.why2, 0.6, 1, 0.6, true) end
+      if idea.cdUnknown then
+        GameTooltip:AddLine(L["No se sabe aún si su enfriamiento está listo: al abrir la profesión se comprueba (si no lo está, sale del lote)."], 1, 0.6, 0.2, true)
+      end
       if idea.fewer then GameTooltip:AddLine(L["Menos de las que caben: con más, los materiales salen más caros y ya no compensa."], 1, 0.6, 0.2, true) end
       if idea.limit == "margin" then
         GameTooltip:AddLine(L["Hasta aquí: más allá, los materiales que quedan en la AH salen tan caros que la siguiente ya no compensa."], 0.8, 0.8, 0.8, true)
@@ -113,7 +116,10 @@ local function IdeaTooltip(idea)
         or string.format(L["Pide %s %d (tienes %d)."], ES:ProfLabel(idea.profKey), idea.need, idea.rank),
         idea.canLearn and 0.4 or 1, idea.canLearn and 1 or 0.6, idea.canLearn and 0.4 or 0.2, true)
       if idea.payback then
-        GameTooltip:AddLine(string.format(L["Lo que cuesta aprenderla se recupera en %d fabricaciones."], idea.payback), 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine(string.format(idea.cooldown and L["Tiene enfriamiento (una cada vez): lo que cuesta aprenderla se recupera en %d fabricaciones."]
+          or L["Lo que cuesta aprenderla se recupera en %d fabricaciones."], idea.payback), 0.8, 0.8, 0.8, true)
+      elseif idea.cooldown then
+        GameTooltip:AddLine(L["Tiene enfriamiento: se puede fabricar una cada vez."], 0.8, 0.8, 0.8, true)
       end
     end
     if idea.sellWhere == "ah" then ES.Market.AddToTooltip(e.itemID, e.ahPrice or e.ahMin) end
@@ -182,7 +188,9 @@ local function IdeaLineBase(idea, dim)
   -- Lote de la AH: botones − y + para elegir tú cuántas (Earn.StepQuantity). Por
   -- encima de lo recomendado, se dice en naranja
   local onStep
-  if idea.inBatch and idea.sellWhere == "ah" then
+  if idea.cooldown then
+    sub = sub .. (idea.cdUnknown and (ORANGE .. L[" · enfriamiento: ¿listo?"] .. "|r") or (GREEN .. L[" · enfriamiento listo"] .. "|r"))
+  elseif idea.inBatch and idea.sellWhere == "ah" then
     onStep = function(delta)
       ES.Earn.StepQuantity(idea, delta)
       if ES.RenderEarn then ES:RenderEarn() end
@@ -497,6 +505,7 @@ function ES:RenderEarn()
         or (ORANGE .. string.format(L["pide %d"], idea.need) .. "|r")
       local where = idea.sellWhere == "ah" and string.format(L["AH %s/u"], ES.Money(e.ahPrice or e.ahMin))
         or string.format(L["vendedor %s/u"], ES.Money(e.vendor))
+      if idea.cooldown then where = where .. L[" · con enfriamiento"] end
       lines[#lines + 1] = HideRecipe({ icon = texture or 134400, title = name or e.recipe.name,
         sub = string.format("%s · %s · %s · %s", ES:ProfLabel(idea.profKey), learn, req, where),
         value = GREEN .. "+" .. ES.Money(e.profit) .. "/u|r", item = e.itemID, tooltip = IdeaTooltip(idea) }, e.id)
@@ -507,11 +516,22 @@ function ES:RenderEarn()
   if #cds > 0 and Section(lines, "cooldowns", L["Enfriamientos"], #cds) then
     for _, c in ipairs(cds) do
       local name, texture = ItemLabel(c.recipe.out and c.recipe.out[1] or 0, c.recipe.name)
-      lines[#lines + 1] = { icon = texture or 134400, title = name or c.recipe.name,
-        sub = c.ready and (GREEN .. L["Listo: fabrícalo hoy"] .. "|r")
-          or string.format(L["Listo en %d h"], math.ceil(c.left / 3600)),
+      local sub
+      if c.unknown then
+        sub = GREY .. L["Abre la profesión para saber si está listo"] .. "|r"
+      elseif not c.ready then
+        sub = string.format(L["Listo en %d h"], math.ceil(c.left / 3600))
+      elseif c.inBatch then
+        sub = GREEN .. L["Listo: está en el lote de hoy"] .. "|r"
+      else
+        sub = GREEN .. L["Listo: fabrícalo hoy"] .. "|r"
+      end
+      local id = c.id
+      lines[#lines + 1] = { icon = texture or 134400, title = name or c.recipe.name, sub = sub,
         value = c.profit and (c.profit > 0 and Signed(-c.profit) or (GREY .. L["sin beneficio ahora|r"])) or "",
-        item = c.recipe.out and c.recipe.out[1] }
+        item = c.recipe.out and c.recipe.out[1],
+        -- Clic: abrir la receta y fabricar una (con la profesión abierta se sabe si está lista)
+        onClick = (c.ready or c.unknown) and function() ES:CraftRecipe(id, 1) end or nil }
     end
   end
   local nAvoided = math.min(#res.avoided, MAX_AVOIDED)

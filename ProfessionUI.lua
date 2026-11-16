@@ -559,10 +559,49 @@ local function PhaseShort(outlook)
   return id and { itemID = id, n = n } or nil
 end
 
+-- Lo que llevas de un material contando lo que ya convertiste: la ruta pide Runecloth
+-- para hacer Bolt of Runecloth, y al convertirlo el Runecloth bajaba y la ruta volvía a
+-- pedir comprarlo (Discord). Por cada intermedio que fabrica la ruta (plan.crafted), lo
+-- que llevas de él vale lo que lleva de cada material (y así hacia abajo).
+-- bags(itemID): lo que hay en las bolsas. Devuelve have(itemID)
+-- `level`: de cada intermedio cuenta como mucho lo que la ruta aún gasta desde ahí (los
+-- de más no son material de la ruta: si no, sobrarían Bolts y faltaría el Runecloth
+-- suelto que pide otra receta)
+local function ConvertedHave(plan, bags, level)
+  local made, cap = {}, {}
+  for _, c in ipairs(plan.crafted or {}) do
+    if c.recipe and c.recipe.r and c.recipe.out then
+      made[c.itemID] = c.recipe
+      local rem = level and ES.Planner.CraftedNeedFrom(plan, c.itemID, level)
+      cap[c.itemID] = rem and math.ceil(rem - 0.001) or c.quantity
+    end
+  end
+  local function Held(itemID) return math.min(bags(itemID), cap[itemID] or math.huge) end
+  local inside = {} -- [material] = { { intermedio, unidades por intermedio } }
+  local function Walk(top, itemID, per, depth)
+    local r = made[itemID]
+    if not r or depth > 3 then return end
+    local outN = math.max(1, r.out[2] or 1)
+    for _, rg in ipairs(r.r) do
+      local q = per * rg[2] / outN
+      inside[rg[1]] = inside[rg[1]] or {}
+      table.insert(inside[rg[1]], { top, q })
+      Walk(top, rg[1], q, depth + 1)
+    end
+  end
+  for itemID in pairs(made) do Walk(itemID, itemID, 1, 1) end
+  return function(itemID)
+    local n = bags(itemID)
+    for _, x in ipairs(inside[itemID] or {}) do n = n + math.floor(Held(x[1]) * x[2] + 0.001) end
+    return n
+  end
+end
+
 local function Outlook(profKey, plan, level)
   if not (plan and ES.Shopping.ByPhase(profKey) and ES:RouteLock(profKey)) then return nil end
-  return ES.Planner.PhaseOutlook(plan, math.max(plan.from, level or plan.from),
-    function(itemID) return ES:ItemCount(itemID) end)
+  local from = math.max(plan.from, level or plan.from)
+  return ES.Planner.PhaseOutlook(plan, from,
+    ConvertedHave(plan, function(itemID) return ES:ItemCount(itemID) end, from))
 end
 
 -- Para la línea de estado de la ruta empezada
@@ -943,14 +982,36 @@ end
 ---------------------------------------------------------------------------
 -- Filas de la lista
 ---------------------------------------------------------------------------
+-- Los clics de un marco de tooltip pasan al de debajo (la fila). En combate el juego
+-- lo bloquea (SetPropagateMouseClicks: ADDON_ACTION_BLOCKED al abrir una ruta peleando,
+-- una vez por fila): se deja para cuando acabe; mientras, el icono no pasa el clic
+local pendingClicks = {}
+local function PassClicks(frame)
+  if InCombatLockdown and InCombatLockdown() then
+    pendingClicks[#pendingClicks + 1] = frame
+    return
+  end
+  if frame.SetMouseClickEnabled then frame:SetMouseClickEnabled(false) end
+  if frame.SetPropagateMouseClicks then frame:SetPropagateMouseClicks(true) end
+end
+do
+  local f = CreateFrame("Frame")
+  ES.SafeRegister(f, "PLAYER_REGEN_ENABLED")
+  f:SetScript("OnEvent", function()
+    local list = pendingClicks
+    pendingClicks = {}
+    for _, frame in ipairs(list) do PassClicks(frame) end
+  end)
+end
+ES.UI.PassClicks = PassClicks
+
 -- Tooltip del objeto al pasar el ratón por un icono (en filas propias de otras
 -- páginas: la calculadora). getItem() da el itemID o nil. Los clics pasan a la fila
 function ES.UI.ItemIconTooltip(row, icon, getItem)
   local hover = CreateFrame("Frame", nil, row)
   hover:SetAllPoints(icon)
   hover:EnableMouse(true)
-  if hover.SetMouseClickEnabled then hover:SetMouseClickEnabled(false) end
-  if hover.SetPropagateMouseClicks then hover:SetPropagateMouseClicks(true) end
+  PassClicks(hover)
   hover:SetScript("OnEnter", function(self)
     local id = getItem()
     if not id then return end
@@ -1021,8 +1082,7 @@ local function CreateRow(parent)
   row.iconHover = CreateFrame("Frame", nil, row)
   row.iconHover:SetAllPoints(row.iconSlot)
   row.iconHover:EnableMouse(true)
-  if row.iconHover.SetMouseClickEnabled then row.iconHover:SetMouseClickEnabled(false) end
-  if row.iconHover.SetPropagateMouseClicks then row.iconHover:SetPropagateMouseClicks(true) end
+  PassClicks(row.iconHover)
   row.iconHover:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetHyperlink("item:" .. row.item)
@@ -2250,7 +2310,9 @@ end
 -- opts.phase: siempre por tramos (las filas de compra), aunque la lista sea de la ruta entera
 local function RouteBuy(plan, profKey, level, opts)
   local routeNeed, phase = ES.Planner.RouteNeed(profKey, plan, level, opts)
-  local function Have(itemID) return ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID) end
+  local function Bags(itemID) return ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID) end
+  -- (lo ya convertido cuenta como su material: ConvertedHave)
+  local Have = ConvertedHave(plan, Bags, math.max(plan.from or level or 1, level or plan.from or 1))
   local shopping = {}
   for _, it in ipairs(plan.shopping or {}) do shopping[it.itemID] = it end
   local res = { ah = {}, vendor = {}, have = {}, left = 0, need = {}, phase = phase, Have = Have }
@@ -2312,6 +2374,23 @@ local function BuyList(items, have)
   return table.concat(parts, " · ")
 end
 
+-- Qué filas de compra salen: { { source, items } }. Orden: banco (lo tuyo, gratis),
+-- AH, vendedor. En la AH, una fila por material (el clic abre la compra de ese; con
+-- todos en una, el clic siempre abría el primero y el asistente no llegaba al
+-- segundo). El banco y el vendedor, en una: su clic ya lo saca o lo compra todo
+local function BuyGroups(buy)
+  local groups = {}
+  for _, source in ipairs({ "bank", "ah", "vendor" }) do
+    if source == "ah" then
+      for _, it in ipairs(buy.ah) do groups[#groups + 1] = { source, { it } } end
+    elseif buy[source][1] then
+      groups[#groups + 1] = { source, buy[source] }
+    end
+  end
+  return groups
+end
+ES.UI.BuyGroups = BuyGroups -- (pruebas)
+
 local function BuyLine(source, items, buy, level, visited, profKey)
   local single = #items == 1 and items[1]
   local name, texture = single and ItemLabel(single.itemID, L["Objeto "] .. single.itemID)
@@ -2339,16 +2418,31 @@ local function BuyLine(source, items, buy, level, visited, profKey)
     action = L["sacar a tus bolsas lo que falta"]
     onClick = function() ES.Assistant.TakeFromBank(items) end
   elseif source == "ah" and ES:IsAuctionHouseOpen() then
+    -- (en la AH cada fila es un material: AddBuyLines)
     local it = items[1]
     action = string.format(L["abrir la compra de %d en la AH"], it.quantity)
     onClick = function() ES:OpenAuctionBuy(it.itemID, it.quantity, it.unit) end
   elseif source == "vendor" and ES.Ledger and ES.Ledger:MerchantOpen() and ES.VendorShop then
-    local entries, want = {}, {}
-    for _, it in ipairs(items) do want[it.itemID] = true end
-    for _, e in ipairs(ES.VendorShop:List()) do if want[e.itemID] then entries[#entries + 1] = e end end
-    if entries[1] then
-      action = L["comprar a este vendedor lo que vende de la lista"]
-      onClick = function() for _, e in ipairs(entries) do ES.VendorShop:Buy(e) end end
+    -- Vendedor abierto: compra justo lo que falta del tramo (lo de esta fila, no lo de
+    -- la lista de compra) de lo que tenga; lo que no tiene, se dice. Si no tiene nada
+    -- de la fila, el clic marca el camino a quien lo vende (WP.Vendors)
+    local sells = {}
+    for i = 1, (GetMerchantNumItems and GetMerchantNumItems()) or 0 do
+      local id = ES.Ledger.MerchantItemID(i)
+      if id then sells[id] = true end
+    end
+    local here = false
+    for _, it in ipairs(items) do if sells[it.itemID] then here = true end end
+    if here then
+      action = L["comprar a este vendedor justo lo que falta"]
+      onClick = function()
+        local bought, missing = ES.VendorShop:BuyExact(items)
+        if missing[1] then
+          local names = {}
+          for _, it in ipairs(missing) do names[#names + 1] = ES:DataItemName(it.itemID) or tostring(it.itemID) end
+          ES:Print(string.format(L["Este vendedor no tiene: %s. Sigue la fila para ir a otro."], table.concat(names, ", ")))
+        end
+      end
     end
   end
   if not onClick then go = WP.Target(bank and "bank" or source == "ah" and "auction" or "vendor", items[1].itemID) end
@@ -2459,10 +2553,9 @@ local function AddBuyLines(lines, plan, page, level)
   end
   local atStart = not buy.phase or level <= buy.phase.steps[1].from
   local new, blocking = {}, false
-  -- Orden: banco (lo tuyo, gratis), AH, vendedor
-  for _, source in ipairs({ "bank", "ah", "vendor" }) do
-    local items = buy[source]
-    if items[1] then
+  for _, g in ipairs(BuyGroups(buy)) do
+    local source, items = g[1], g[2]
+    do
       local visited = visits and visits[source]
       local line = BuyLine(source, items, buy, level, visited, page.profKey)
       -- Para: toca fabricar y no puedes, o empieza el tramo y aún no has ido a comprar
@@ -2701,7 +2794,19 @@ local function RouteLines(plan, page, opts)
     -- el paso en el que estás (antes que aprender la receta o fabricarla)
     local prepPending = false
     local afterStep = {} -- (lo que se fabrica más tarde: después de la fila del paso)
-    for _, c in ipairs(craftBefore[i] or {}) do
+    for _, c0 in ipairs(craftBefore[i] or {}) do
+      -- Ruta empezada: lo que gastan los niveles que te QUEDAN, no los de toda la ruta
+      -- (en 229 de una túnica de 226 a 230 quedan las de un punto, no las 20 del
+      -- principio). Si ya no hace falta, no sale
+      local c = c0
+      if locked and (page.from or 0) > (plan.from or 0) then
+        local rem = ES.Planner.CraftedNeedFrom(plan, c0.itemID, page.from)
+        if rem then
+          c = { itemID = c0.itemID, recipe = c0.recipe, from = c0.from,
+            quantity = math.min(c0.quantity, math.ceil(rem - 0.001)) }
+        end
+      end
+      if c.quantity > 0 then
       local name, texture = ItemLabel(c.itemID, L["Objeto "] .. c.itemID)
       local conversion = c.recipe and c.recipe.conversion
       -- Clic: como en los pasos, abre su receta y fabrica lo que falta (3 restos -> 1 cuero)
@@ -2800,6 +2905,7 @@ local function RouteLines(plan, page, opts)
         end,
       }
       if later then afterStep[#afterStep + 1] = line else lines[#lines + 1] = line end
+      end -- (c.quantity > 0)
     end
     local r = st.recipe
     local name, texture = ItemLabel(r.out and r.out[1] or 0, r.name)

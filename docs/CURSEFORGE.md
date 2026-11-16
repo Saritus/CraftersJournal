@@ -88,7 +88,7 @@ If Crafter's Journal saved you some gold, you can **[☕ buy me a coffee](https:
 
 [![Donate](URL_BOTON_DONATE)](https://buymeacoffee.com/brunobasas) [![Discord](URL_BOTON_DISCORD)](https://discord.gg/DjT4HatsF)
 
-<sub>Data: WoW Forever client tables (wago.tools), My Forever Recipe Book, QuestieDB and CMaNGOS, community Merchant's Favor guides. Routes are checked against the wow-professions.com Forever guides.</sub>
+<sub>Data: WoW Forever client tables (wago.tools), QuestieDB and CMaNGOS, community Merchant's Favor guides. Routes are checked against the wow-professions.com Forever guides.</sub>
 ```
 
 ## Botones Donate y Discord

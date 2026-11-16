@@ -118,7 +118,7 @@ end
 -- Dibujo de un botón de engranaje (el de las ventanas de al lado y el de la cabecera)
 -- El engranaje de 64 px del mapa (el cuarto de arriba a la izquierda del archivo): se
 -- ve nítido al reducirlo. El de antes (UI-OptionsButton) es pequeño y salía borroso.
--- Lo usa también ForeverRecipeBook en este cliente. En gris y teñido de dorado
+-- En gris y teñido de dorado
 local GEAR = "Interface\\WorldMap\\Gear_64.png"
 local function GearTexture(tex, r, g, b)
   if not tex then return end
@@ -258,7 +258,26 @@ local OPTIONS = {
       if ES.RefreshAllViews then ES:RefreshAllViews() end
       ES:ApplyOptions("noTsmDemand", on)
     end },
+  -- Umbrales de la demanda de TSM (Market.TSMMinSold / TSMMinRate): deslizadores por
+  -- escalones; en gris si no se usa TSM
+  { key = "tsmMinSold", cat = "earn", kind = "slider", label = "Demanda de TSM: vendidos al día, mínimo",
+    desc = "Por debajo, alerta de poca demanda (y no se propone aprender la receta). Cuenta toda la región: tu reino vende como mucho eso.",
+    steps = ES.Market.TSM_SOLD_STEPS, default = ES.Market.TSM_MIN_SOLD,
+    text = function(v) return v > 0 and string.format(L["%s al día"], ES.Market.Dec(v)) or L["No cuenta"] end,
+    enabled = function() return not ES.db.noTsmDemand end },
+  { key = "tsmMinRate", cat = "earn", kind = "slider", label = "Demanda de TSM: tasa de venta mínima",
+    desc = "Qué parte de lo que se anuncia acaba vendiéndose (1 = todo). Por debajo, alerta de poca demanda.",
+    steps = ES.Market.TSM_RATE_STEPS, default = ES.Market.TSM_MIN_RATE,
+    text = function(v) return v > 0 and ES.Market.Dec(v) or L["No cuenta"] end,
+    enabled = function() return not ES.db.noTsmDemand end },
 }
+
+-- Cambió un umbral de mercado: Ganar dinero y lo que dependa de las alertas, de nuevo
+local function ApplyMarketSetting()
+  if ES.Earn and ES.Earn.Clear then ES.Earn:Clear(true) end
+  if ES.RefreshAllViews then ES:RefreshAllViews() end
+  ES:ApplyOptions()
+end
 ES.OPTIONS = OPTIONS -- (el menú del engranaje saca de aquí el nombre de cada ventana)
 
 -- Categorías de la ventana, en el orden de la lista de la izquierda: General y una por
@@ -322,8 +341,99 @@ local function CreateCheck(page, o)
   cb:SetScript("OnClick", function(self)
     local on = self:GetChecked() and true or false
     if o.set then o.set(on) else ES:SetOption(o.key, on) end
+    if page.Refresh then page:Refresh() end -- (un deslizador puede depender de ella)
   end)
   return cb
+end
+
+-- Un deslizador por escalones (o.kind == "slider"): nombre, valor elegido a la
+-- derecha, qué hace y la barra. Guarda ES.db[o.key] (el valor del escalón; nada si es
+-- el de por defecto). o = { steps, default, text(v), enabled() }
+local SLIDER_W = 240
+local function SliderIndex(o)
+  local v = ES.db[o.key]
+  if type(v) ~= "number" then v = o.default end
+  local best = 1
+  for i, s in ipairs(o.steps) do if s <= v + 1e-9 then best = i end end
+  return best
+end
+
+local function CreateSlider(page, o)
+  local row = CreateFrame("Frame", nil, page)
+  row:SetSize(CONTENT_W, 60)
+  row.option, row.isSlider = o, true
+  row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  row.label:SetPoint("TOPLEFT", 32, -5)
+  row.label:SetWidth(DESC_W)
+  row.label:SetJustifyH("LEFT")
+  row.desc = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.desc:SetPoint("TOPLEFT", row.label, "BOTTOMLEFT", 0, -5)
+  row.desc:SetWidth(DESC_W)
+  row.desc:SetJustifyH("LEFT")
+  row.desc:SetTextColor(0.78, 0.74, 0.66)
+  local slider = CreateFrame("Slider", nil, row, "BackdropTemplate")
+  slider:SetSize(SLIDER_W, 16)
+  slider:SetPoint("TOPLEFT", row.desc, "BOTTOMLEFT", 0, -8)
+  slider:SetOrientation("HORIZONTAL")
+  slider:SetBackdrop({
+    bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+    edgeFile = "Interface\\Buttons\\UI-SliderBar-Border", edgeSize = 8,
+    insets = { left = 3, right = 3, top = 6, bottom = 6 },
+  })
+  slider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+  slider:SetMinMaxValues(1, #o.steps)
+  slider:SetValueStep(1)
+  if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
+  slider:EnableMouseWheel(true)
+  row.slider = slider
+  row.value = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  row.value:SetPoint("LEFT", slider, "RIGHT", 12, 0)
+
+  -- Elegir el escalón i: se guarda y se aplica (true si cambió)
+  function row.Set(i)
+    i = math.max(1, math.min(#o.steps, i))
+    local v = o.steps[i]
+    local was = ES.db[o.key]
+    ES.db[o.key] = (math.abs(v - o.default) > 1e-9) and v or nil
+    row.value:SetText(o.text(v))
+    if was == ES.db[o.key] then return false end
+    ApplyMarketSetting()
+    return true
+  end
+  -- (al soltar o tras un momento quieto: arrastrar no recalcula en cada escalón)
+  local pending, wanted
+  slider:SetScript("OnValueChanged", function(self, value)
+    if row.syncing then return end
+    wanted = math.floor(value + 0.5)
+    row.value:SetText(o.text(o.steps[math.max(1, math.min(#o.steps, wanted))]))
+    if not pending and C_Timer then
+      pending = true
+      C_Timer.After(0.25, function() pending = nil row.Set(wanted) end)
+    end
+  end)
+  slider:SetScript("OnMouseWheel", function(self, delta)
+    if not o.enabled() then return end
+    self:SetValue(math.max(1, math.min(#o.steps, SliderIndex(o) + (delta > 0 and 1 or -1))))
+  end)
+
+  -- Textos, valor guardado y si se puede tocar; devuelve lo que mide la fila
+  function row.Refresh()
+    row.label:SetText(L[o.label])
+    row.desc:SetText(L[o.desc])
+    local i = SliderIndex(o)
+    row.value:SetText(o.text(o.steps[i]))
+    row.syncing = true
+    slider:SetValue(i)
+    row.syncing = nil
+    local on = o.enabled()
+    slider:EnableMouse(on)
+    slider:SetAlpha(on and 1 or 0.4)
+    row.label:SetAlpha(on and 1 or 0.5)
+    row.value:SetAlpha(on and 1 or 0.5)
+    local descH = tonumber(row.desc:GetStringHeight()) or 0
+    return 5 + 14 + 5 + descH + 8 + 16 + 4
+  end
+  return row
 end
 
 -- Textos y marcas de una categoría (el idioma o las opciones pueden haber cambiado) y
@@ -332,13 +442,19 @@ local function RefreshPage(page)
   local y = -6
   for _, cb in ipairs(page.checks) do
     local o = cb.option
-    cb.label:SetText(L[o.label])
-    cb.desc:SetText(L[o.desc])
-    if o.get then cb:SetChecked(o.get()) else cb:SetChecked(not ES.db[o.key]) end
     cb:ClearAllPoints()
     cb:SetPoint("TOPLEFT", 6, y)
-    local descH = tonumber(cb.desc:GetStringHeight()) or 0
-    y = y - math.max(30, 24 + descH) - 14
+    if cb.isSlider then
+      local h = cb.Refresh()
+      cb:SetHeight(h)
+      y = y - h - 14
+    else
+      cb.label:SetText(L[o.label])
+      cb.desc:SetText(L[o.desc])
+      if o.get then cb:SetChecked(o.get()) else cb:SetChecked(not ES.db[o.key]) end
+      local descH = tonumber(cb.desc:GetStringHeight()) or 0
+      y = y - math.max(30, 24 + descH) - 14
+    end
   end
   page:SetHeight(math.max(1, -y))
 end
@@ -486,11 +602,12 @@ local function CreateWindow()
     page:SetSize(CONTENT_W, 1)
     page:Hide()
     page.key, page.label, page.checks = cat.key, cat.label, {}
+    page.Refresh = RefreshPage
     f.pages[cat.key] = page
   end
   for _, o in ipairs(OPTIONS) do
     local page = f.pages[o.cat] or f.pages.general
-    local cb = CreateCheck(page, o)
+    local cb = o.kind == "slider" and CreateSlider(page, o) or CreateCheck(page, o)
     page.checks[#page.checks + 1] = cb
     f.checks[#f.checks + 1] = cb
   end

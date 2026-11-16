@@ -243,6 +243,31 @@ function Vendor:Buy(entry)
   if not self.pumping then self:Pump() end
 end
 
+-- Compra justo `items` ({ itemID, quantity }: lo que falta) al vendedor abierto, en sus
+-- lotes. Devuelve los que compra y los que este vendedor no tiene
+function Vendor:BuyExact(items)
+  local bought, missing, total = {}, {}, 0
+  for _, it in ipairs(items) do
+    local i = FindIndex(it.itemID)
+    local price, batch, avail, gold
+    if i then price, batch, avail, gold = Ledger().MerchantInfo(i) end
+    if i and price and price > 0 and gold and avail ~= 0 and (it.quantity or 0) > 0 then
+      batch = math.max(batch or 1, 1)
+      local qty = math.ceil(it.quantity / batch) * batch
+      bought[#bought + 1] = { itemID = it.itemID, qty = qty, batch = batch, cost = qty / batch * price }
+      total = total + qty / batch * price
+    elseif (it.quantity or 0) > 0 then
+      missing[#missing + 1] = it
+    end
+  end
+  if total > ((GetMoney and GetMoney()) or 0) then
+    ES:Print(string.format(L["Comprarlo todo cuesta %s: más de lo que llevas."], ES.Money(total)))
+    return {}, missing
+  end
+  for _, e in ipairs(bought) do self:Buy(e) end
+  return bought, missing
+end
+
 function Vendor:BuyAll()
   local list = {}
   for _, e in ipairs(self:List()) do if e.qty > 0 then list[#list + 1] = e end end
@@ -518,7 +543,9 @@ do
   end
   local queued = false
   local function Later(delay)
-    C_Timer.After(delay, function() if MerchantFrame and MerchantFrame:IsShown() then Vendor:Refresh() end end)
+    C_Timer.After(delay, function()
+      if MerchantFrame and MerchantFrame:IsShown() then Vendor:Refresh() end
+    end)
   end
   f:SetScript("OnEvent", function(_, event)
     if not ES.db then return end

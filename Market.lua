@@ -354,11 +354,21 @@ end
 -- TSM redondea los valores a entero: la tasa (0-1) y los vendidos al día se piden
 -- x1000, como hace su propio tooltip.
 ---------------------------------------------------------------------------
-local TSM_MIN_RATE = 0.15  -- tasa de venta mínima (en Forever-EU, ~el 20% que menos se vende)
-local TSM_MIN_SOLD = 1     -- vendidos al día en la región
+-- Umbrales: los elige el jugador en las opciones de Ganar dinero (deslizadores por
+-- escalones; 0 = ese criterio no cuenta). Por defecto, tasa 0,15 (en Forever-EU, ~el
+-- 20% de objetos que menos se vende) y 1 vendido al día en la región
+Market.TSM_RATE_STEPS = { 0, 0.05, 0.1, 0.15, 0.25, 0.4, 0.6 }
+Market.TSM_SOLD_STEPS = { 0, 0.25, 0.5, 1, 2, 5, 10 }
+Market.TSM_MIN_RATE, Market.TSM_MIN_SOLD = 0.15, 1 -- (por defecto)
 local TSM_LOW_PRICE = 0.75 -- aviso si la venta media es menos de esto de nuestro precio
-Market.TSM_MIN_RATE, Market.TSM_MIN_SOLD = TSM_MIN_RATE, TSM_MIN_SOLD
 Market.TSM_SELL_DAYS = 2   -- tope del lote: lo que se vende en la región en estos días
+
+local function Setting(key, default)
+  local v = ES.db and ES.db[key]
+  return type(v) == "number" and v >= 0 and v or default
+end
+function Market.TSMMinRate() return Setting("tsmMinRate", Market.TSM_MIN_RATE) end
+function Market.TSMMinSold() return Setting("tsmMinSold", Market.TSM_MIN_SOLD) end
 
 -- Número con 2 decimales como mucho (0,75 vendidos al día; tasa 0,3), coma salvo en inglés
 function Market.Dec(x)
@@ -401,7 +411,8 @@ end
 function Market:Demand(itemID)
   local d = self:TSMDemand(itemID)
   if not d then return { known = false, tsm = Market.TSMOn() } end
-  return { known = true, tsm = true, flag = d.rate < TSM_MIN_RATE or d.sold < TSM_MIN_SOLD,
+  local minRate, minSold = Market.TSMMinRate(), Market.TSMMinSold()
+  return { known = true, tsm = true, flag = (minRate > 0 and d.rate < minRate) or (minSold > 0 and d.sold < minSold),
     rate = d.rate, sold = d.sold, avg = d.avg }
 end
 

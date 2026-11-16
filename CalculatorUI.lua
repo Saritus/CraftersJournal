@@ -13,6 +13,7 @@ local BUTTON_W = 160 -- los tres botones de abajo, en una fila
 local FOOTER_H = 10 + 22 + 6 -- alto de esa fila (margen, botón, hueco): las notas acaban encima
 local ROW_H = 30      -- filas de material: casillas de 20 px con aire arriba y abajo
 local LINE_H = 26     -- líneas de resumen (materiales, venta, comisión, depósito)
+local ROWS_TOP = 78   -- donde empiezan las filas de materiales (bajo la cabecera de columnas)
 local MAX_RESULTS = 8
 
 local function Money(c) return ES.Money(c) end
@@ -283,8 +284,7 @@ local INDENT = 18 -- sangría de lo que va dentro de un intermedio
 local function SheetRow(page, i)
   local row = page.sheetRows[i]
   if row then return row end
-  local p = page.sheet
-  row = CreateFrame("Frame", nil, p)
+  row = CreateFrame("Frame", nil, page.rowsChild)
   row:SetHeight(ROW_H)
   row.icon = row:CreateTexture(nil, "ARTWORK")
   row.icon:SetSize(20, 20)
@@ -325,7 +325,7 @@ local function MadeRow(page, i)
   page.madeRows = page.madeRows or {}
   local row = page.madeRows[i]
   if row then return row end
-  row = CreateFrame("Button", nil, page.sheet)
+  row = CreateFrame("Button", nil, page.rowsChild)
   row:SetHeight(ROW_H)
   row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   row.icon = row:CreateTexture(nil, "ARTWORK")
@@ -424,6 +424,18 @@ local function CreateSheet(page)
   local totalHead = ES.UI.Label(head, L["Total"], "GameFontNormalSmall")
   totalHead:SetPoint("RIGHT", -14, 0)
   page.colHead = head
+
+  -- Las filas de materiales, en su propio marco desplazable (rueda y guía a la
+  -- derecha): con muchos materiales empujaban el resumen y los botones fuera del panel.
+  -- Si caben, se ve igual que antes
+  page.rowsScroll = ES.UI.WheelScroll(p, ROW_H * 2)
+  page.rowsScroll:SetPoint("TOPLEFT", 0, -ROWS_TOP)
+  page.rowsScroll:SetPoint("TOPRIGHT", 0, -ROWS_TOP)
+  page.rowsScroll:SetHeight(1)
+  page.rowsChild = CreateFrame("Frame", nil, page.rowsScroll)
+  page.rowsChild:SetSize(1, 1)
+  page.rowsScroll:SetScrollChild(page.rowsChild)
+  page.rowsGuide = ES.UI.ScrollIndicator(page.rowsScroll, page.rowsChild, 5)
 
   page.sheetRows = {}
   page.matTotal = SummaryLine(p)
@@ -632,6 +644,8 @@ function ES:CreateCalculatorPage(page)
   page.sheet:SetPoint("TOPLEFT", page.listPanel, "TOPRIGHT", 8, 0)
   page.sheet:SetPoint("BOTTOMRIGHT", -UI.PAD, UI.PAD)
   CreateSheet(page)
+  -- (cuánto cabe depende del alto del panel: si cambia, se vuelve a repartir)
+  page.sheet:SetScript("OnSizeChanged", function() if page:IsVisible() then ES:RenderCalculator() end end)
 
   page:SetScript("OnShow", function() ES:RenderCalculator() end)
   -- Llegan nombres e iconos que faltaban: se repinta
@@ -689,6 +703,7 @@ function ES:RenderCalculator()
   if not showSheet then
     for _, row in ipairs(page.sheetRows) do row:Hide() end
     for _, row in ipairs(page.madeRows or {}) do row:Hide() end
+    page.rowsGuide:Hide()
     return
   end
 
@@ -698,9 +713,10 @@ function ES:RenderCalculator()
     .. (ES:IsRecipeKnown(selected.recipe) and "" or (ORANGE .. " · " .. L["no la sabes"] .. "|r")))
   if page.qty:HasFocus() ~= true then page.qty:SetText(tostring(selected.qty or 1)) end
 
-  local y = -78
   -- La hoja como un árbol (Calc:Compute, res.display): cada intermedio con su fila
-  -- (cómo se consigue; clic para cambiarlo) y lo suyo debajo, un poco más adentro
+  -- (cómo se consigue; clic para cambiarlo) y lo suyo debajo, un poco más adentro.
+  -- Las filas van dentro de page.rowsChild (desplazable): `y` cuenta desde su borde
+  local y = 0
   local rowOf = {}
   for _, r in ipairs(res.rows) do rowOf[r.itemID] = r end
   local nMade, nRows = 0, 0
@@ -756,6 +772,29 @@ function ES:RenderCalculator()
   end
   for i = nMade + 1, #(page.madeRows or {}) do page.madeRows[i]:Hide() end
   for i = nRows + 1, #page.sheetRows do page.sheetRows[i]:Hide() end
+
+  -- Alto de las filas a la vista: todas si caben; si no, lo que deja el resumen de
+  -- debajo (materiales, venta, comisión, beneficio, dónde se vende) y los botones, y
+  -- el resto con la rueda. Como mínimo, dos filas
+  local rowsH = -y
+  local summaryH = (8 + LINE_H) + (4 + LINE_H) + (res.cut > 0 and LINE_H or 0) + (8 + LINE_H)
+    + (res.canChoose and LINE_H or 0) + 6
+  local sheetH = tonumber(page.sheet:GetHeight()) or 0
+  local room = sheetH - ROWS_TOP - summaryH - FOOTER_H
+  local visible = rowsH
+  if sheetH > 0 and rowsH > room then visible = math.max(math.min(rowsH, ROW_H * 2), room) end
+  page.rowsChild:SetWidth(math.max(1, tonumber(page.sheet:GetWidth()) or 1))
+  page.rowsChild:SetHeight(math.max(1, rowsH))
+  page.rowsScroll:SetHeight(math.max(1, visible))
+  if page.rowsCalcID ~= selected.id then page.rowsScroll:SetVerticalScroll(0) end
+  page.rowsCalcID = selected.id
+  if page.rowsScroll.UpdateScrollChildRect then page.rowsScroll:UpdateScrollChildRect() end
+  -- (con menos filas que antes, que no se quede desplazada más allá del final)
+  local maxScroll = math.max(0, rowsH - visible)
+  if (tonumber(page.rowsScroll:GetVerticalScroll()) or 0) > maxScroll then page.rowsScroll:SetVerticalScroll(maxScroll) end
+  page.rowsScroll.overflow = rowsH > visible -- (pruebas)
+  page.rowsGuide:Update()
+  y = -ROWS_TOP - visible
 
   local function Place(line, gap)
     y = y - (gap or 0)

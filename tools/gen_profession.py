@@ -10,6 +10,7 @@
 Uso:  python gen_profession.py [Leatherworking]
 """
 import csv
+import os
 import re
 import sys
 from collections import defaultdict
@@ -126,7 +127,10 @@ TOOL_HOTFIXES = {
 # Ya no se ligan al recogerlo (10 nov): Swiftfeather Arrow, Swiftstrike Shot
 NOT_BOP_HOTFIXES = {274387, 274388}
 FOREVER_FEES = HERE / "forever" / "trainer_fees.csv"
-RECIPEBOOK_TRAINERS = HERE / "forever" / "recipebook_trainers.csv"
+# Datos de Forever que no van en el repositorio (instructores, vendedores y PNJ): su
+# carpeta, junto al repositorio o en CJ_PRIVATE_DATA. Sin ella, se usa solo lo demás
+PRIVATE = Path(os.environ.get("CJ_PRIVATE_DATA") or (HERE.parent.parent / "CraftersJournal-private"))
+FOREVER_TRAINERS = PRIVATE / "forever_trainers.csv"
 FOREVER_SELL = HERE / "forever" / "sell_prices.csv"
 # Recetas que se compran con Merchant's Favor (tools/forever/fetch_merchants_favor.py)
 MERCHANTS_FAVOR = HERE / "forever" / "merchants_favor.csv"
@@ -295,20 +299,20 @@ def load_common():
                 teachers[spell].add(npc)
                 if spell not in fees or cost < fees[spell][0]:
                     fees[spell] = (cost, req, False)
-    # Instructores de Forever (tools/forever/recipebook_trainers.csv, ver
-    # import_recipebook.py): quién enseña cada receta, a qué nivel y por cuánto. Mandan
-    # sobre CMaNGOS (Classic): Forever cambió niveles y movió recetas de rango. Su nivel
-    # ya es el de Forever. Precio: el más alto entre sus instructores (el que lo apuntó
-    # tenía descuento de reputación en algunos). Lo que CMaNGOS da de instructor y aquí
-    # no enseña nadie (The Shatterer, Troll's Blood Elixir...): no se aprende de instructor
+    # Instructores de Forever (FOREVER_TRAINERS): quién enseña cada receta, a qué nivel y
+    # por cuánto. Mandan sobre CMaNGOS (Classic): Forever cambió niveles y movió recetas
+    # de rango. Su nivel ya es el de Forever. Precio: el más alto entre sus instructores
+    # (en algunos se apuntó con descuento de reputación). Lo que CMaNGOS da de instructor
+    # y aquí no enseña nadie (The Shatterer, Troll's Blood Elixir...): no se aprende de
+    # instructor
     untaught = set()
-    if RECIPEBOOK_TRAINERS.exists():
-        book = defaultdict(list)
-        with open(RECIPEBOOK_TRAINERS, encoding="utf-8") as f:
+    if FOREVER_TRAINERS.exists():
+        taught = defaultdict(list)
+        with open(FOREVER_TRAINERS, encoding="utf-8") as f:
             for r in csv.DictReader(line for line in f if not line.startswith("#")):
-                book[int(r["spell"])].append((int(r["npc"]), int(r["skill"]), int(r["cost"])))
-        untaught = {s for s in fees if s not in book}
-        for spell, rows_ in book.items():
+                taught[int(r["spell"])].append((int(r["npc"]), int(r["skill"]), int(r["cost"])))
+        untaught = {s for s in fees if s not in taught}
+        for spell, rows_ in taught.items():
             fees[spell] = (max(c for _, _, c in rows_), min(k for _, k, _ in rows_), True)
             teachers[spell] = {n for n, _, _ in rows_}
         for spell in untaught:
@@ -348,28 +352,28 @@ VENDOR_MIN = 10        # vendedores en QuestieDB para tratarlo como de venta ili
 VENDOR_MIN_DRINK = 3   # bebidas y comida (clase 0, subclase 5): bastan menos (cerveceros, posaderos)
 
 
-RECIPEBOOK_VENDORS = HERE / "forever" / "recipebook_vendors.csv"
-RECIPEBOOK_NPCS = HERE / "forever" / "recipebook_npcs.csv"
-_book_sold = None
+FOREVER_VENDORS = PRIVATE / "forever_scroll_vendors.csv"
+FOREVER_NPCS = PRIVATE / "forever_npcs.csv"
+_forever_sold = None
 
 
-def book_sold():
-    """Pergaminos que vende algún PNJ de Forever con sitio en el mapa (recipebook_*.csv),
+def forever_sold():
+    """Pergaminos que vende algún PNJ de Forever con sitio en el mapa (FOREVER_VENDORS),
     o None si no están esos datos"""
-    global _book_sold
-    if _book_sold is None and RECIPEBOOK_VENDORS.exists() and RECIPEBOOK_NPCS.exists():
-        with open(RECIPEBOOK_NPCS, encoding="utf-8") as f:
+    global _forever_sold
+    if _forever_sold is None and FOREVER_VENDORS.exists() and FOREVER_NPCS.exists():
+        with open(FOREVER_NPCS, encoding="utf-8") as f:
             placed = {int(r["npc"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))}
-        with open(RECIPEBOOK_VENDORS, encoding="utf-8") as f:
-            _book_sold = {int(r["item"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))
+        with open(FOREVER_VENDORS, encoding="utf-8") as f:
+            _forever_sold = {int(r["item"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))
                           if int(r["npc"]) in placed}
-    return _book_sold
+    return _forever_sold
 
 
 def sold_by_vendor(item_id):
-    """¿Algún PNJ vende este objeto? Los de Forever (recipebook_vendors.csv) si están;
+    """¿Algún PNJ vende este objeto? Los de Forever (FOREVER_VENDORS) si están;
     si no, QuestieDB (que tiene vendedores de Season of Discovery que Forever no tiene)"""
-    sold = book_sold()
+    sold = forever_sold()
     if sold is not None:
         return item_id in sold
     questie.load_store()
@@ -377,7 +381,7 @@ def sold_by_vendor(item_id):
     return bool(r and questie.ids(questie.field("Item", item_id, questie.ITEM["vendors"], r)))
 
 
-_book_sold_any = None
+_forever_sold_any = None
 
 
 def vendor_only_gone(item_id):
@@ -385,13 +389,13 @@ def vendor_only_gone(item_id):
     de misiones ni de botín): no se consigue (Spitfire, Ironvine... de Aendel Windspear).
     Cuenta cualquier vendedor de Forever, también los de mazmorra sin sitio en el mapa
     (Lokhtos Darkbargainer, en Blackrock Depths)"""
-    global _book_sold_any
-    if _book_sold_any is None:
-        if not RECIPEBOOK_VENDORS.exists():
+    global _forever_sold_any
+    if _forever_sold_any is None:
+        if not FOREVER_VENDORS.exists():
             return False
-        with open(RECIPEBOOK_VENDORS, encoding="utf-8") as f:
-            _book_sold_any = {int(r["item"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))}
-    if item_id in _book_sold_any:
+        with open(FOREVER_VENDORS, encoding="utf-8") as f:
+            _forever_sold_any = {int(r["item"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))}
+    if item_id in _forever_sold_any:
         return False
     questie.load_store()
     r = questie.row("Item", item_id)

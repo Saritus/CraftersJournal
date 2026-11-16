@@ -15,6 +15,24 @@ local A = {}
 ES.Assistant = A
 
 local WIDTH, BANNER_H, ICON, LEVEL_W = 420, 68, 42, 58 -- (tamaño fijo: cabe un título de dos líneas y el subtítulo)
+local LEVEL_STRIPE = 9 -- la franja de color de la izquierda y su margen: el nivel va a su derecha
+
+-- El nivel siempre cabe en su columna, sea cual sea el número ("226–230" con la letra
+-- normal pisaba la franja de color): con la letra normal si cabe; si no, más pequeña;
+-- y si aún no, el rango en dos líneas (226– / 230). `color`: código de color o nil
+function A.FitLevel(fs, text, color)
+  local room = LEVEL_W - LEVEL_STRIPE - 4
+  local function Set(t) fs:SetText(color and (color .. t .. "|r") or t) end
+  fs:SetWidth(0)
+  fs:SetFontObject(GameFontNormal)
+  Set(text)
+  if (tonumber(fs:GetStringWidth()) or 0) <= room then return end
+  fs:SetFontObject(GameFontNormalSmall)
+  if (tonumber(fs:GetStringWidth()) or 0) <= room then return end
+  local a, b = text:match("^(%d+)(%D.*)$")
+  if a then Set(a .. "\n" .. b) end
+  fs:SetWidth(room)
+end
 local PAD, CLOSE_SIZE, COUNT_W = 12, 22, 52 -- margen del marco, la X y las flechas, el "7/20" entre ellas
 -- Pestaña de ◀ ▶: margen dentro, cuánto se mete bajo el marco, distancia al borde derecho
 local TAB_INSET, TAB_TUCK, TAB_RIGHT = 9, 8, 14
@@ -347,6 +365,8 @@ local nav -- el panel de la flecha (CreateUI)
 -- Pinta la flecha hacia el destino del paso (state.navNpc); sin destino, se esconde
 local function NavTick()
   if not nav then return end
+  -- (celebrando el paso hecho: la flecha sigue con su destino hasta que entre el siguiente)
+  if state.hold then return end
   local npc = state.navNpc and ES.Waypoints.NPC(state.navNpc)
   if not npc or state.completed then
     nav:Hide()
@@ -412,7 +432,9 @@ local function Fade()
   if banner.fade then banner.fade:Stop() banner.fade:Play() end
 end
 
--- Paso completado: un brillo dorado en el icono y un ✓ que se van solos
+-- Paso completado: un brillo dorado en el icono y un ✓ que se van solos, sobre el paso
+-- hecho; el siguiente entra al acabar (A.Update)
+A.CELEBRATE_HOLD = 1.0
 local function Celebrate()
   if not banner.done then return end
   banner.done:Stop()
@@ -536,7 +558,7 @@ local function Paint()
 
   -- Columna de nivel, como en la fila: "226–230" en fabricar, "225" en aprender o entrenar
   local level = state.completed and tostring(state.lock.to) or (line and line.level) or ""
-  banner.level:SetText((peeking or (line and line.done)) and (GREY .. level .. "|r") or level)
+  A.FitLevel(banner.level, level, (peeking or (line and line.done)) and GREY or nil)
 
   -- ◀ ▶: si hay paso anterior o siguiente que ojear; entre ellas, cuál es de cuántos
   -- (ojeando, el que miras, en gris; con la ruta completada, el último)
@@ -671,8 +693,10 @@ local function CreateUI()
 
   -- Columna de nivel, como en las filas de la ruta (centrada y con su línea)
   banner.level = banner:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  banner.level:SetPoint("CENTER", banner, "LEFT", LEVEL_W / 2 + 1, 0)
-  banner.level:SetWordWrap(false)
+  -- (centrada en lo que queda a la derecha de la franja de color: A.FitLevel)
+  banner.level:SetPoint("CENTER", banner, "LEFT", (LEVEL_STRIPE + LEVEL_W) / 2, 0)
+  banner.level:SetJustifyH("CENTER")
+  banner.level:SetWordWrap(true)
   banner.levelLine = banner:CreateTexture(nil, "ARTWORK")
   banner.levelLine:SetWidth(1)
   banner.levelLine:SetPoint("TOPLEFT", LEVEL_W, -8)
@@ -728,7 +752,8 @@ local function CreateUI()
   check:SetSize(22, 22)
   check:SetPoint("BOTTOMRIGHT", 6, -6)
   banner.done = done:CreateAnimationGroup()
-  for i, step in ipairs({ { 0, 1, 0.15 }, { 1, 1, 0.7 }, { 1, 0, 0.8 } }) do
+  -- (dura A.CELEBRATE_HOLD: se va justo cuando entra el paso siguiente)
+  for i, step in ipairs({ { 0, 1, 0.15 }, { 1, 1, 0.55 }, { 1, 0, 0.3 } }) do
     local a = banner.done:CreateAnimation("Alpha")
     a:SetFromAlpha(step[1])
     a:SetToAlpha(step[2])
@@ -749,6 +774,12 @@ local function CreateUI()
       if not menu then CreateMenu() end
       A.RefreshMenu()
       menu:SetShown(not menu:IsShown())
+      return
+    end
+    -- Celebrando el paso hecho: el banner aún enseña ese paso (y su clic, que volvería a
+    -- hacerlo: fabricar de más). El clic solo acaba la celebración y enseña el siguiente
+    if state.hold then
+      A.EndHold()
       return
     end
     ES.UI.RowClick(self, button)
@@ -1008,11 +1039,35 @@ function A.Update()
   end
   local wasShown = frame:IsShown()
   frame:Show()
+  state.celebrated = advanced and wasShown or nil -- (para pruebas)
+  if advanced and wasShown and C_Timer and A.CELEBRATE_HOLD > 0 then
+    -- Paso hecho: el ✓ sale sobre ESE paso, que aún se ve, y luego entra el siguiente.
+    -- Antes se pintaba el nuevo y el ✓ caía encima ("Compra 10× Gold Bar" con un ✓,
+    -- como si ya estuviera comprado)
+    Celebrate()
+    local token = {}
+    state.hold = token
+    C_Timer.After(A.CELEBRATE_HOLD, function()
+      if state.hold == token then A.EndHold() end
+    end)
+    return
+  end
+  -- (mientras se celebra el paso hecho, lo que llegue se pinta al acabar: el estado ya
+  -- está al día y el pintado lo recoge)
+  if state.hold then return end
   Paint()
   NavTick()
   if changed and wasShown then Fade() end
-  if advanced and wasShown then Celebrate() end
-  state.celebrated = advanced and wasShown or nil -- (para pruebas)
+end
+
+-- Acaba la celebración del paso hecho: entra el siguiente (al pasar el tiempo o con un clic)
+function A.EndHold()
+  if not state.hold then return end
+  state.hold = nil
+  if banner and banner.done then banner.done:Stop() end
+  Paint()
+  NavTick()
+  Fade()
 end
 
 -- Varias cosas cambian a la vez (comprar, fabricar...): una sola vez, al momento siguiente
