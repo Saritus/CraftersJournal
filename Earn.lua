@@ -141,8 +141,21 @@ local function Batch(idea, e)
     n = math.min(TEST_BATCH, share)
     why = L["Alertas de mercado dudosas: unos pocos para probar."]
   end
+  -- Con TSM: no más de lo que se vende en toda la región en unos días (tu reino vende
+  -- como mucho eso; los vendidos son unidades y aquí se cuentan fabricaciones)
+  local d = idea.signals and idea.signals.demand
+  if d and d.known then
+    local days = ES.Market.TSM_SELL_DAYS
+    local cap = math.max(1, math.ceil(d.sold * days / math.max(1, e.qty)))
+    if cap < n then
+      n = cap
+      why = string.format(L["TSM: en la región se venden ~%s al día: como mucho lo que se vende en %d días."],
+        ES.Market.Dec(d.sold), days)
+    end
+  end
   return math.max(1, n), why
 end
+Earn.Batch = Batch -- (pruebas)
 
 ---------------------------------------------------------------------------
 -- Cantidad elegida por ti en una línea del lote (botones − y + de la fila): manda
@@ -421,23 +434,57 @@ function Earn.AddLearnable(res, e, profKey, rank, minLine)
   res.learnable[#res.learnable + 1] = idea
 end
 
+-- Recetas que quitaste de Ganar dinero con la ✕ de su fila (Discord: proponía recetas
+-- con enfriamiento y de cocina que piden una estación cara). ES.db.earnHidden[receta]
+function Earn.IsHidden(id)
+  return ES.db.earnHidden ~= nil and ES.db.earnHidden[id] == true
+end
+
+function Earn.SetHidden(id, hidden)
+  ES.db.earnHidden = ES.db.earnHidden or {}
+  ES.db.earnHidden[id] = hidden and true or nil
+  if not next(ES.db.earnHidden) then ES.db.earnHidden = nil end
+  Earn:Clear(true) -- (se vuelve a hacer el lote sin ellas; los precios no cambian)
+end
+
+-- Las quitadas, con su nombre: { { id, name } }, por nombre
+function Earn.HiddenList()
+  local list = {}
+  for id in pairs(ES.db.earnHidden or {}) do
+    local name
+    for _, p in ipairs(ES.PROFESSIONS or {}) do
+      local r = ES.Data[p.key] and ES.Data[p.key].recipes and ES.Data[p.key].recipes[id]
+      if r then name = r.name end
+    end
+    list[#list + 1] = { id = id, name = name or ("#" .. id) }
+  end
+  table.sort(list, function(a, b) return a.name < b.name end)
+  return list
+end
+
 function Earn:Ideas()
   local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
   local minLine = Earn.MinLineProfit()
   local stamp = table.concat({ scan and scan.time or 0, ES:RealmKey(), ES.repStamp or "", minLine }, ":")
   if cache and cache.stamp == stamp then return cache end
   local res = { stamp = stamp, ideas = {}, avoided = {}, vendor = {}, learnable = {}, scanTime = scan and scan.time, profs = Earn.MyProfessions(), known = 0,
-    minLine = minLine, hidden = 0 }
+    minLine = minLine, hidden = 0, removed = 0, cdProfit = {} }
   for _, profKey in ipairs(res.profs) do
     local data = ES.Data[profKey]
     local rank = ES:GetProfessionSkill(data.skillLine) or 0
     local entries, ctx = RecipeMarketFor(profKey, data, scan)
     for _, e in ipairs(entries) do
-      if LEARNABLE[e.learnSource] then
-        Earn.AddLearnable(res, e, profKey, rank, minLine)
+      -- Recetas con enfriamiento (transmutaciones, tela lunar): una al día, no un lote de
+      -- 20. Van en su sección (Enfriamientos), con su beneficio
+      local cooldown = e.recipe and ES.Planner.Cooldown(e.recipe, e.id)
+      if cooldown and e.profit then res.cdProfit[e.id] = e.profit end
+      if Earn.IsHidden(e.id) then
+        res.removed = res.removed + 1
+      elseif LEARNABLE[e.learnSource] then
+        if not cooldown then Earn.AddLearnable(res, e, profKey, rank, minLine) end
       elseif e.learnSource == "known" then
         res.known = res.known + 1
-        if e.cost and e.profit and e.profit >= math.max(MIN_PROFIT, e.cost * MIN_MARGIN) then
+        if not cooldown and e.cost and e.profit and e.profit >= math.max(MIN_PROFIT, e.cost * MIN_MARGIN) then
           local idea = { e = e, profKey = profKey, itemID = e.itemID, sellWhere = e.sellWhere, unitCost = e.cost }
           if idea.sellWhere == "ah" then
             idea.signals = ES.Market:Signals(e.itemID)
@@ -570,7 +617,7 @@ function Earn:Cooldowns()
         local start, duration = GetSpellCooldown(id)
         local left = (start and start > 0 and duration) and (start + duration - GetTime()) or 0
         -- Beneficio de hacerlo, si está entre las ideas (o las descartadas por el mercado)
-        local profit
+        local profit = cache and cache.cdProfit and cache.cdProfit[id] -- (ya no entran en el lote)
         for _, idea in ipairs(cache and cache.ideas or {}) do if idea.e.id == id then profit = idea.e.profit end end
         for _, idea in ipairs(cache and cache.vendor or {}) do if idea.e.id == id then profit = idea.e.profit end end
         for _, idea in ipairs(cache and cache.avoided or {}) do if idea.e.id == id then profit = idea.e.profit end end

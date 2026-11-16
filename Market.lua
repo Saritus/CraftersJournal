@@ -343,7 +343,69 @@ function Market.ListPrice(fp)
   return fp.inflated and fp.price or math.max(1, fp.price - 1)
 end
 
-Market.SIGNALS = 3   -- estancado, precio clavado, más oferta
+---------------------------------------------------------------------------
+-- Demanda según TSM (Discord: "2 ventas al día según TSM"). Nuestras señales miran
+-- tu AH con tus escaneos y no pueden contar ventas; la app de TSM sí las cuenta, pero
+-- de toda la región (todos los reinos de Forever-EU, por ejemplo). Es una señal
+-- aparte, con su origen a la vista: solo AÑADE prudencia (nunca quita una alerta de
+-- tu escaneo), cuenta para el veredicto y pone tope a cuántas fabricar (Earn.lua).
+-- Sin TSM, sin su app (TradeSkillMaster_AppHelper) o con la opción quitada
+-- (ES.db.noTsmDemand), no hay señal y todo es como antes.
+-- TSM redondea los valores a entero: la tasa (0-1) y los vendidos al día se piden
+-- x1000, como hace su propio tooltip.
+---------------------------------------------------------------------------
+local TSM_MIN_RATE = 0.15  -- tasa de venta mínima (en Forever-EU, ~el 20% que menos se vende)
+local TSM_MIN_SOLD = 1     -- vendidos al día en la región
+local TSM_LOW_PRICE = 0.75 -- aviso si la venta media es menos de esto de nuestro precio
+Market.TSM_MIN_RATE, Market.TSM_MIN_SOLD = TSM_MIN_RATE, TSM_MIN_SOLD
+Market.TSM_SELL_DAYS = 2   -- tope del lote: lo que se vende en la región en estos días
+
+-- Número con 2 decimales como mucho (0,75 vendidos al día; tasa 0,3), coma salvo en inglés
+function Market.Dec(x)
+  if x >= 10 then return ES.Num(x) end
+  local s = string.format("%.2f", x):gsub("0+$", ""):gsub("%.$", "")
+  if ES.lang ~= "en" then s = s:gsub("%.", ",") end
+  return s
+end
+
+local tsmMemo = {} -- itemID -> datos o false (los de TSM cambian al entrar, no al escanear)
+function Market.ClearTSM() tsmMemo = {} end
+
+-- ¿Se puede preguntar a TSM? (instalado y la opción puesta)
+function Market.TSMOn()
+  return TSM_API ~= nil and type(TSM_API.GetCustomPriceValue) == "function"
+    and not (ES.db and ES.db.noTsmDemand)
+end
+
+local function TSMValue(source, itemID)
+  local ok, v = pcall(TSM_API.GetCustomPriceValue, source, "i:" .. itemID)
+  if ok and type(v) == "number" then return v end
+end
+
+-- { rate, sold, avg } de la región, o nil (sin TSM o sin datos de ese objeto)
+function Market:TSMDemand(itemID)
+  if not itemID or not Market.TSMOn() then return nil end
+  local m = tsmMemo[itemID]
+  if m == nil then
+    local rate = TSMValue("DBRegionSaleRate * 1000", itemID)
+    local sold = TSMValue("DBRegionSoldPerDay * 1000", itemID)
+    -- (TSM da nil en vez de 0: con uno de los dos, el otro es ~0)
+    m = (rate or sold) and { rate = (rate or 0) / 1000, sold = (sold or 0) / 1000,
+      avg = TSMValue("DBRegionSaleAvg", itemID) } or false
+    tsmMemo[itemID] = m
+  end
+  return m or nil
+end
+
+-- La señal: poca demanda si se vende poco de lo que se anuncia o menos de 1 al día
+function Market:Demand(itemID)
+  local d = self:TSMDemand(itemID)
+  if not d then return { known = false, tsm = Market.TSMOn() } end
+  return { known = true, tsm = true, flag = d.rate < TSM_MIN_RATE or d.sold < TSM_MIN_SOLD,
+    rate = d.rate, sold = d.sold, avg = d.avg }
+end
+
+Market.SIGNALS = 3   -- estancado, precio clavado, más oferta (+ demanda de TSM, si hay datos)
 
 -- Todas las señales de un objeto y el veredicto: good, watch, avoid o unknown
 function Market:Signals(itemID)
@@ -353,15 +415,18 @@ function Market:Signals(itemID)
     price = self:PriceStuck(points),
     supply = self:Supply(points),
     wall = self:Wall(itemID),   -- solo dato
+    demand = self:Demand(itemID),
   }
   s.nailed = { known = s.price.known, flag = s.price.flag and s.wall.flag or false }
   local flags, known = 0, 0
-  for _, key in ipairs({ "stuck", "nailed", "supply" }) do
+  for _, key in ipairs({ "stuck", "nailed", "supply", "demand" }) do
     if s[key].known then known = known + 1 end
     if s[key].flag then flags = flags + 1 end
   end
   s.flags, s.known = flags, known
-  if s.stuck.flag or (s.nailed.flag and s.supply.flag) then
+  s.total = Market.SIGNALS + (s.demand.known and 1 or 0)
+  -- (poca demanda sola es "ojo"; con otra alerta en contra, evitar)
+  if s.stuck.flag or (s.nailed.flag and s.supply.flag) or (s.demand.flag and flags >= 2) then
     s.verdict = "avoid"
   elseif flags >= 1 then
     s.verdict = "watch"
@@ -413,6 +478,14 @@ function Market.Describe(s)
   else
     lines[#lines + 1] = { L["Más oferta: falta una foto de hace ~1 día"], nil }
   end
+  -- Demanda de TSM: solo si tienes TSM (sin él, ni se nombra)
+  local d = s.demand
+  if d and d.known then
+    lines[#lines + 1] = { string.format(L["Demanda (TSM, región): ~%s vendidos al día, tasa de venta %s"],
+      Market.Dec(d.sold), Market.Dec(d.rate)), d.flag }
+  elseif d and d.tsm then
+    lines[#lines + 1] = { L["Demanda (TSM): sin datos de este objeto (¿la app de TSM está al día?)"], nil }
+  end
   -- Competencia: solo dato (tercer campo = informativa, sin icono)
   if w.known then
     lines[#lines + 1] = { string.format(L["Competencia: %d subastas (%d uds) en el precio mínimo"], w.listings, w.units), nil, true }
@@ -422,12 +495,18 @@ function Market.Describe(s)
   return lines
 end
 
--- Añade la sección de señales a GameTooltip
-function Market.AddToTooltip(itemID)
+-- ¿La venta media de TSM está muy por debajo del precio al que contamos venderlo?
+function Market.TSMLowPrice(s, price)
+  local d = s and s.demand
+  return d and d.known and d.avg and price and price > 0 and d.avg < price * TSM_LOW_PRICE or false
+end
+
+-- Añade la sección de señales a GameTooltip (`price`: al que contamos venderlo, por unidad)
+function Market.AddToTooltip(itemID, price)
   local s = Market:Signals(itemID)
   GameTooltip:AddLine(" ")
   GameTooltip:AddDoubleLine(L["Mercado"], Market.LABELS[s.verdict]
-    .. string.format(L[" (%d de %d señales en contra)"], s.flags, Market.SIGNALS), 1, 0.82, 0, 1, 1, 1)
+    .. string.format(L[" (%d de %d señales en contra)"], s.flags, s.total), 1, 0.82, 0, 1, 1, 1)
   for _, l in ipairs(Market.Describe(s)) do
     if l[3] then
       GameTooltip:AddLine("    " .. l[1], 0.6, 0.6, 0.6, true)
@@ -437,9 +516,14 @@ function Market.AddToTooltip(itemID)
       GameTooltip:AddLine((l[2] and Market.ICON_BAD or l[2] == false and Market.ICON_OK or Market.ICON_NONE) .. l[1], r, g, b, true)
     end
   end
+  if Market.TSMLowPrice(s, price) then
+    GameTooltip:AddLine(string.format(L["TSM: en la región se vende de media a %s, bastante menos que los %s con los que se cuenta aquí."],
+      ES.Money(s.demand.avg), ES.Money(price)), 1, 0.6, 0.2, true)
+  end
   if s.verdict == "avoid" then
     GameTooltip:AddLine(s.stuck.flag and L["Las más baratas no se venden: aunque el margen parezca bueno, probablemente no lo venderás."]
-      or L["Precio clavado y cada vez más oferta: aunque el margen parezca bueno, probablemente no lo venderás."], 1, 0.4, 0.4, true)
+      or (s.nailed.flag and s.supply.flag) and L["Precio clavado y cada vez más oferta: aunque el margen parezca bueno, probablemente no lo venderás."]
+      or L["Poca demanda según TSM y otra alerta en contra: aunque el margen parezca bueno, probablemente no lo venderás."], 1, 0.4, 0.4, true)
   end
   return s
 end

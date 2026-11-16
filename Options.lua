@@ -59,6 +59,7 @@ local function OptionLabel(key)
     if o.key == key then return L[o.label] end
   end
 end
+ES.OptionLabel = OptionLabel -- (también el diálogo de confirmar: ES:Confirm, UI.lua)
 
 -- Menú pequeño del engranaje: la opción justa de esa ventana ("No mostrar esta
 -- ventana", lo mismo que quitar su casilla en las opciones) y, debajo, todas las
@@ -211,6 +212,8 @@ local OPTIONS = {
   { key = "minimap", cat = "general", label = "Botón del minimapa", desc = "El botón de Crafter's Journal junto al minimapa. También con /cj minimap.",
     get = function() return not (ES.db.minimap and ES.db.minimap.hide) end,
     set = function(on) ES:SetMinimapShown(on) end },
+  { key = "noWhatsNew", cat = "general", label = "Mostrar las novedades al actualizar",
+    desc = "Tras actualizar el addon, una ventana con lo nuevo de esa versión (una vez por versión). También se quita con su casilla \"No volver a mostrar\"." },
   { key = "noChatAlerts", cat = "general", label = "Avisos en el chat",
     desc = "Tras un escaneo: recetas de botín que te faltan y están en la AH, y si tu ruta empezada cuesta bastante más con los precios nuevos. Desactivados, la ruta lo sigue diciendo en su línea de estado." },
   -- Lista de compra
@@ -226,17 +229,35 @@ local OPTIONS = {
   -- Vendedor
   { key = "noVendorWindow", cat = "vendor", label = "Ventana junto al vendedor",
     desc = "Al abrir un vendedor: lo que te falta de la lista de compra y lo que puedes venderle, con los botones Comprar todo y Vender todo." },
+  -- Confirmar antes de las acciones de golpe (ES:Confirm, UI.lua): su casilla "No volver
+  -- a mostrar este aviso" las apaga; aquí se vuelven a encender
+  { key = "noSellAllConfirm", cat = "vendor", label = "Confirmar antes de Vender todo",
+    desc = "Al pulsar Vender todo en la ventana junto al vendedor, pregunta antes qué vende y por cuánto." },
+  { key = "noBuyAllConfirm", cat = "vendor", label = "Confirmar antes de Comprar todo",
+    desc = "Al pulsar Comprar todo en la ventana junto al vendedor, pregunta antes cuántos materiales compra y por cuánto." },
   -- Inventario (qué se propone vender: también la ventana del vendedor)
   -- (por defecto desactivada: se propone todo y lo tuyo lo apartas con clic derecho)
   { key = "protectGear", cat = "inventory", label = "No vender tu equipo",
     desc = "Activado, el equipo ligado a ti (tu otro equipo, lo de las misiones) y el de los conjuntos del gestor de equipo no se propone vender (ni Vender todo lo vende); los verdes sin ligar de botín, lo que fabricas y lo gris, sí. Desactivado, se propone todo: lo que quieras guardar, clic derecho y no se vende nunca.",
     get = function() return ES.db.protectGear == true end,
     set = function(on) ES.db.protectGear = on or nil ES:ApplyOptions("protectGear", on) end },
+  { key = "noInventorySellConfirm", cat = "inventory", label = "Confirmar antes de vender todo al vendedor",
+    desc = "Al pulsar el botón de vender al vendedor de la pestaña Inventario, pregunta antes cuántos objetos vende y por cuánto." },
   { key = "noAddonPrices", cat = "inventory", label = "Usar los precios de Auctionator o TSM",
     desc = "Si tu escaneo no tiene un objeto de tus bolsas, se usa el precio que guarda Auctionator o TSM para decidir si va a la AH o al vendedor. Tu escaneo siempre manda." },
   -- Ganar dinero (la ventana junto a la profesión enseña lo que propone esa pestaña)
   { key = "noCraftWindow", cat = "earn", label = "Ventana junto a la profesión",
     desc = "Al abrir una profesión: lo que la pestaña Ganar dinero propone fabricar de esa profesión. Clic en una fila para fabricarlo." },
+  -- (Market.lua: una señal más de mercado y tope del lote; sin TSM no hace nada)
+  { key = "noTsmDemand", cat = "earn", label = "Usar la demanda de TSM",
+    desc = "Si tienes TSM con su app de escritorio: cuántos se venden al día en la región y qué parte de lo que se anuncia se vende. Es una alerta más de mercado y no se proponen más de los que se venden en 2 días. Tus escaneos siguen mandando.",
+    set = function(on)
+      ES.db.noTsmDemand = (not on) or nil
+      ES.Market.ClearTSM()
+      if ES.Earn and ES.Earn.Clear then ES.Earn:Clear(true) end
+      if ES.RefreshAllViews then ES:RefreshAllViews() end
+      ES:ApplyOptions("noTsmDemand", on)
+    end },
 }
 ES.OPTIONS = OPTIONS -- (el menú del engranaje saca de aquí el nombre de cada ventana)
 

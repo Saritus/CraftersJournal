@@ -346,15 +346,29 @@ local function CreatePanel()
   end
   f.buyAll = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   f.buyAll:SetSize(WIDTH - 24, 24)
-  f.buyAll:SetScript("OnClick", function() Vendor:BuyAll() end)
+  -- Comprar todo y Vender todo preguntan antes (ES:Confirm, UI.lua; se quita con su
+  -- casilla o en /cj opciones, categoría Vendedor)
+  f.buyAll:SetScript("OnClick", function()
+    local n, total = 0, 0
+    for _, e in ipairs(Vendor:List()) do if e.qty > 0 then n, total = n + 1, total + e.cost end end
+    if n == 0 then return end
+    ES:Confirm({ key = "noBuyAllConfirm", title = L["Comprar todo"],
+      text = string.format(L["¿Comprar %d materiales de la lista de compra por %s?"], n, ES.Money(total)),
+      onYes = function() Vendor:BuyAll() end })
+  end)
   f.sellAll = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   f.sellAll:SetSize(WIDTH - 24, 24)
   f.sellAll:SetScript("OnClick", function()
     local list = Vendor:SellList()
+    if #list == 0 then return end
     local total = 0
     for _, e in ipairs(list) do total = total + e.value end
-    ES:Print(string.format(L["Vendiendo %d objetos por %s..."], #list, ES.Money(total)))
-    Vendor:Sell(list)
+    ES:Confirm({ key = "noSellAllConfirm", title = L["Vender todo"],
+      text = string.format(L["¿Vender %d objetos al vendedor por %s?"], #list, ES.Money(total)),
+      onYes = function()
+        ES:Print(string.format(L["Vendiendo %d objetos por %s..."], #list, ES.Money(total)))
+        Vendor:Sell(list)
+      end })
   end)
   -- Qué vende y cómo quitar la ventana (a quien le parece arriesgado tener el botón)
   f.sellAll:SetScript("OnEnter", function(self)

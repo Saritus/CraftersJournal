@@ -706,3 +706,97 @@ function ES:HideAuctionHouseUI()
   if mini then mini:Hide() end
   if CraftersJournalAuctionSellPanel then CraftersJournalAuctionSellPanel:Hide() end
 end
+
+---------------------------------------------------------------------------
+-- Confirmar antes de una acción de golpe (vender todo, comprar todo, anunciar en la AH):
+-- "¿Seguro?" con Sí y No, y la casilla "No volver a mostrar este aviso", que apaga la
+-- opción de ese aviso (ES.db[opts.key] = true); se vuelve a encender en /cj opciones,
+-- en la categoría de esa acción. CurseForge: un clic sin querer anunció o vendió de golpe.
+--   opts = { key, title, text, warn (aviso en naranja, opcional), yes (texto del botón,
+--            opcional), onYes = función }
+-- La acción sale del clic en Sí: vender, comprar y anunciar piden un clic del jugador
+---------------------------------------------------------------------------
+local confirm
+local WARN_H = 40 -- alto extra con aviso (dos líneas)
+local function ConfirmDialog()
+  if confirm then return confirm end
+  local d = CreateFrame("Frame", "CraftersJournalPostConfirm", UIParent, "BackdropTemplate")
+  confirm = d
+  d:SetSize(380, 170)
+  d:SetPoint("CENTER", 0, 120)
+  d:SetFrameStrata("FULLSCREEN_DIALOG")
+  d:EnableMouse(true)
+  d:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 },
+  })
+  tinsert(UISpecialFrames, "CraftersJournalPostConfirm") -- Escape: no
+  d.title = d:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  d.title:SetPoint("TOP", 0, -20)
+  d.text = d:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  d.text:SetPoint("TOP", d.title, "BOTTOM", 0, -10)
+  d.text:SetWidth(330)
+  d.check = CreateFrame("CheckButton", nil, d, "UICheckButtonTemplate")
+  d.check:SetSize(24, 24)
+  d.check:SetPoint("TOPLEFT", 24, -78)
+  d.checkLabel = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  d.checkLabel:SetPoint("LEFT", d.check, "RIGHT", 2, 1)
+  -- Aviso en naranja (p. ej. anunciar todas pese a las alertas); oculto si no hay
+  d.warn = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  d.warn:SetPoint("TOP", d.text, "BOTTOM", 0, -6)
+  d.warn:SetWidth(330)
+  d.warn:SetTextColor(1, 0.6, 0.2)
+  d.note = d:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  d.note:SetPoint("TOPLEFT", d.check, "BOTTOMLEFT", 4, -1)
+  d.note:SetWidth(320)
+  d.note:SetJustifyH("LEFT")
+  d.ok = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
+  d.ok:SetSize(120, 24)
+  d.ok:SetPoint("BOTTOMRIGHT", d, "BOTTOM", -4, 18)
+  d.cancel = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
+  d.cancel:SetSize(120, 24)
+  d.cancel:SetPoint("BOTTOMLEFT", d, "BOTTOM", 4, 18)
+  d.cancel:SetScript("OnClick", function() d.pending = nil d:Hide() end)
+  d.ok:SetScript("OnClick", function()
+    local p = d.pending
+    d.pending = nil
+    d:Hide()
+    if not p then return end
+    if d.check:GetChecked() then
+      ES.db[p.key] = true
+      ES:Print(string.format(L["Ya no se mostrará este aviso. Se vuelve a activar en /cj opciones (%s)."],
+        ES.OptionLabel and ES.OptionLabel(p.key) or p.key))
+    end
+    p.onYes()
+  end)
+  d:Hide()
+  return d
+end
+ES.ConfirmFrame = function() return confirm end -- (para pruebas)
+
+function ES:Confirm(opts)
+  -- Aviso apagado (casilla "No volver a mostrar" u opción): se hace sin preguntar
+  if self.db and self.db[opts.key] then
+    opts.onYes()
+    return
+  end
+  local d = ConfirmDialog()
+  d.pending = opts
+  d.title:SetText(opts.title)
+  d.text:SetText(opts.text)
+  d.warn:SetText(opts.warn or "")
+  if opts.warn then d.warn:Show() else d.warn:Hide() end
+  local extra = opts.warn and WARN_H or 0
+  d:SetHeight(170 + extra)
+  d.check:ClearAllPoints()
+  d.check:SetPoint("TOPLEFT", 24, -78 - extra)
+  d.check:SetChecked(false)
+  d.checkLabel:SetText(L["No volver a mostrar este aviso"])
+  d.note:SetText(string.format(L["Se vuelve a activar en /cj opciones (%s)."],
+    ES.OptionLabel and ES.OptionLabel(opts.key) or opts.key))
+  d.ok:SetText(opts.yes or YES or L["Sí"])
+  d.cancel:SetText(NO or L["No"])
+  d:Show()
+end

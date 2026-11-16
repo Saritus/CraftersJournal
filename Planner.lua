@@ -361,6 +361,22 @@ function Planner.PhaseOutlook(plan, level, have)
   return res
 end
 
+-- Materiales intermedios que la ruta fabrica en cantidades desorbitadas: pasa cuando no
+-- hay ninguno a la venta en tu escaneo (Medium Leather agotado) y la ruta hace toda la
+-- cadena desde abajo (restos -> cuero ligero -> medio -> pesado: miles de fabricaciones,
+-- baratas en oro pero absurdas en tiempo). { { itemID, crafts } }, de más a menos
+Planner.HUGE_CRAFTS = 250
+function Planner.HugeCrafts(plan)
+  local list = {}
+  for _, c in ipairs(plan and plan.crafted or {}) do
+    local per = c.recipe and c.recipe.out and c.recipe.out[2] or 1
+    local crafts = math.ceil((c.quantity or 0) / math.max(1, per) - 0.001)
+    if crafts > Planner.HUGE_CRAFTS then list[#list + 1] = { itemID = c.itemID, crafts = crafts } end
+  end
+  table.sort(list, function(a, b) return a.crafts > b.crafts end)
+  return list
+end
+
 -- Fabricaciones totales de un plan
 function Planner.TotalCrafts(plan)
   local n = 0

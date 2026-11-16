@@ -116,7 +116,7 @@ local function IdeaTooltip(idea)
         GameTooltip:AddLine(string.format(L["Lo que cuesta aprenderla se recupera en %d fabricaciones."], idea.payback), 0.8, 0.8, 0.8, true)
       end
     end
-    if idea.sellWhere == "ah" then ES.Market.AddToTooltip(e.itemID) end
+    if idea.sellWhere == "ah" then ES.Market.AddToTooltip(e.itemID, e.ahPrice or e.ahMin) end
     if idea.shopping then
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine(L["Cada línea del vendedor se calcula por separado: si dos usan los mismos materiales, haz una."], 0.6, 0.6, 0.6, true)
@@ -134,7 +134,19 @@ end
 
 ES.UI.EarnTooltip = IdeaTooltip -- (también la ventana junto a la profesión, CraftWindowUI.lua)
 
-local function IdeaLine(idea, dim)
+-- ✕ de una fila: quitar la receta de Ganar dinero (se recupera con la fila del final)
+local function HideRecipe(line, id)
+  line.onSkip = function()
+    ES.Earn.SetHidden(id, true)
+    ES:RenderEarn()
+    if ES.CraftWindow and ES.CraftWindow.Refresh then ES.CraftWindow:Refresh() end
+  end
+  line.skipTitle = L["Quitar de Ganar dinero"]
+  line.skipTip = L["No volver a proponer esta receta aquí: por ejemplo, si pide una estación que no tienes. Se recupera con la fila de recetas quitadas, al final de la lista."]
+  return line
+end
+
+local function IdeaLineBase(idea, dim)
   local e = idea.e
   local name, texture = ItemLabel(e.itemID, e.recipe.name)
   local where = idea.sellWhere == "ah"
@@ -182,6 +194,11 @@ local function IdeaLine(idea, dim)
   return { icon = texture or 134400, title = string.format("%d× %s", idea.crafts, name or e.recipe.name), sub = sub,
     value = ES.UI.Signed(-idea.profit), item = e.itemID, tooltip = IdeaTooltip(idea), onClick = onClick,
     onRightClick = onRightClick, onStep = onStep }
+end
+
+-- Cada idea, con su ✕ para quitarla de Ganar dinero
+local function IdeaLine(idea, dim)
+  return HideRecipe(IdeaLineBase(idea, dim), idea.e.id)
 end
 
 function ES:CreateEarnPage(page)
@@ -480,9 +497,9 @@ function ES:RenderEarn()
         or (ORANGE .. string.format(L["pide %d"], idea.need) .. "|r")
       local where = idea.sellWhere == "ah" and string.format(L["AH %s/u"], ES.Money(e.ahPrice or e.ahMin))
         or string.format(L["vendedor %s/u"], ES.Money(e.vendor))
-      lines[#lines + 1] = { icon = texture or 134400, title = name or e.recipe.name,
+      lines[#lines + 1] = HideRecipe({ icon = texture or 134400, title = name or e.recipe.name,
         sub = string.format("%s · %s · %s · %s", ES:ProfLabel(idea.profKey), learn, req, where),
-        value = GREEN .. "+" .. ES.Money(e.profit) .. "/u|r", item = e.itemID, tooltip = IdeaTooltip(idea) }
+        value = GREEN .. "+" .. ES.Money(e.profit) .. "/u|r", item = e.itemID, tooltip = IdeaTooltip(idea) }, e.id)
     end
   end
   -- Enfriamientos (transmutaciones...) que sabes
@@ -514,6 +531,27 @@ function ES:RenderEarn()
         value = ES.UI.Signed(-it.value), item = it.itemID,
         onClick = ES.ahOpen and function() ES:SearchAuction(it.itemID) end or nil }
     end
+  end
+  -- Recetas quitadas con la ✕: clic para volver a tenerlas todas en cuenta
+  local removed = ES.Earn.HiddenList()
+  if #removed > 0 then
+    lines[#lines + 1] = {
+      icon = "Interface\\Buttons\\UI-RefreshButton", iconSize = 16,
+      title = string.format(L["Recetas quitadas de Ganar dinero: %d"], #removed),
+      sub = L["Clic para volver a tenerlas en cuenta"],
+      onClick = function()
+        for _, r in ipairs(removed) do ES.Earn.SetHidden(r.id, false) end
+        ES:RenderEarn()
+        if ES.CraftWindow and ES.CraftWindow.Refresh then ES.CraftWindow:Refresh() end
+      end,
+      tooltip = function(row)
+        GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(L["Quitadas de Ganar dinero"])
+        for _, r in ipairs(removed) do GameTooltip:AddLine(r.name, 0.8, 0.8, 0.8) end
+        GameTooltip:AddLine(L["Clic para volver a tenerlas en cuenta"], 0.5, 0.8, 1)
+        GameTooltip:Show()
+      end,
+    }
   end
   page.empty:SetText(#lines == 0 and (#res.profs == 0 and L["Aprende una profesión de fabricación para ver ideas."]
     or not res.scanTime and L["Escanea la AH para ver qué da beneficio."]

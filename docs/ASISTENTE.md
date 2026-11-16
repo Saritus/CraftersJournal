@@ -1,5 +1,10 @@
 # Asistente de ruta (modo mini): diseño
 
+**Salida prevista: beta opcional.** Al publicarlo irá desactivado por defecto: la
+primera casilla de su categoría en /cj opciones, "Activar el asistente de ruta (beta)"
+(`A.Enabled`, `ES.db.assistant.enabled`), lo enciende. Sin activar no sale, `/cj mini`
+dice cómo activarlo y el catalejo junto a Dejar ruta no aparece.
+
 Estado: **en curso, solo en la copia de desarrollo.** `Assistant.lua` va dentro de
 `#@do-not-package@` en el .toc y, con `Media/Assistant`, está excluido en `.pkgmeta` y
 `tools/package.py`: no se publica. Para publicarlo, quitar esas tres cosas (y la prueba
@@ -167,7 +172,12 @@ siempre te enseña lo que toca, y si faltan materiales lo dice.
 
 ### Orden de un tramo
 
-**banco → AH → vendedor → aprender → fabricar**
+**entrenar el rango / aprender la receta → banco → AH → vendedor → fabricar**
+
+(Cambiado el 16/11/2026: antes comprar iba primero. Entrenar y aprender no necesitan los
+materiales; con Alquimia a 225 sin Artesano, el asistente mandaba a la AH antes que al
+instructor. Las compras van delante de la primera fila de fabricar y solo paran la ruta
+cuando lo que toca es fabricar.)
 
 Cada fila es `current` hasta que se completa o deja de bloquear (tabla de arriba);
 entonces queda hecha (✓, gris) y pasa a la siguiente. Los contadores se actualizan solos
@@ -293,13 +303,46 @@ Todo texto visible como `L["..."]` con su traducción en `Locales/` (enUS, deDE,
    en él) o cuando no puedes fabricar ni una vez; si puedes, el paso avisa ("luego compra
    8 Runecloth"). Cerrar la AH o el vendedor con compras pendientes cuenta como "ya fuiste"
    (`ES.routeBuyVisits`, solo esta sesión): dejan de parar mientras puedas fabricar.
-   **Sin probar en el juego.** Aún sin la fila del banco (paso 4).
-4. [ ] Foto del banco, banqueros y fila de banco.
-5. [ ] Flecha 3D (generar la textura) con yardas, llegada y colores.
-6. [ ] Minimapa y mapa del mundo.
-7. [ ] Avisos de barco y zepelín entre continentes.
+   **Sin probar en el juego.**
+4. [x] Banco. Foto por personaje (`ES.charData.bank`) al abrirlo y cuando cambia; las
+   filas de compra restan lo que hay y piden antes "Ve al banco" / "Saca 20× X del
+   banco", con camino al banquero más cercano (`Data/Bankers.lua`, de
+   `tools/gen_bankers.py`: aparte de Sources.lua y, como el asistente, sin publicar).
+   Con el banco abierto, su clic saca justo lo que falta: montones enteros o partidos,
+   a huecos libres de tus bolsas; si no cabe, lo dice. **Sin probar en el juego.**
+5. [x] Flecha 3D con yardas, tiempo, llegada y colores. Textura propia de 64 ángulos
+   (`Media/Assistant/Arrow.tga`, blanca para teñirla) y "has llegado" (`Arrived.tga`),
+   generadas con `tools/gen_assistant_arrow.py`. Va en un panel que cuelga por encima del
+   asistente, con su mismo marco. Las cuentas, en el mapa del continente donde estás
+   (`C_Map.GetPlayerMapPosition`, `GetMapPosFromWorldPos` y su tamaño en yardas). El
+   destino se fija al empezar el paso; pulsar el banner lo vuelve a buscar. En otro
+   continente o sin posición (mazmorra), sin flecha y lo dice. **Sin probar en el juego.**
+6. [x] Minimapa y mapa del mundo. En el minimapa: icono del destino, flecha en el borde
+   si queda fuera y una línea de puntos desde ti (tamaño del minimapa por zoom, dentro o
+   fuera de edificios, y si gira). En el mapa del mundo abierto: el icono del destino si
+   cae en el mapa que miras. Iconos propios (`Pin`, `Edge`, `Dot`). **Sin probar en el juego.**
+7. [x] Otro continente: "Está en Kalimdor" y "Barco en Humedales" / "Zepelín en Durotar",
+   según tu bando (`CROSSINGS` en Assistant.lua; nombres de zona del juego, en tu idioma).
+8. [x] Opciones en la ventana de opciones (categoría "Asistente de ruta", la añade
+   Assistant.lua; "Route Assistant" en inglés): sacarlo solo al empezar una ruta (si
+   no, solo con el botón o /cj mini), bloquearlo, mostrar la flecha GPS (con ella van
+   los iconos del minimapa y del mapa) y mostrar las flechas de pasos (la pestaña de
+   abajo). El tamaño, con clic derecho.
+9. [x] Paso completado: brillo dorado y ✓ en el icono al avanzar.
+
+**Primera versión completa.** Falta probarla en el juego y, después, publicarla: quitar
+los bloques `#@do-not-package@` de `Assistant.lua` y `Data/Bankers.lua` en el .toc, sus
+exclusiones en `.pkgmeta` y `tools/package.py` (con `Media/Assistant`) y la prueba que
+lo comprueba.
 
 ## 9. Pendiente
 
-- **Al final:** botón para abrir el asistente desde la ventana grande (dónde va).
-- **Probar en el juego:** sacar del banco dividiendo montones.
+- [x] Botón para abrir el asistente desde la ventana grande: junto a "Dejar ruta", con
+  la ruta empezada (icono de catalejo). Abre el asistente con esa ruta (sustituye a la
+  que siguiera: `settings.assistantPicked`) o lo cierra si ya la sigue. Solo existe si
+  el asistente está cargado.
+- **Probar en el juego**, sobre todo lo que las pruebas solo pueden simular:
+  - la flecha apunta bien al girar y las yardas son razonables (también en capitales);
+  - el minimapa (icono, borde, puntos; con el minimapa que gira) y el mapa del mundo;
+  - sacar del banco partiendo montones (y con bolsas de profesión);
+  - que el asistente no tape avisos del juego (va en la capa de diálogos).

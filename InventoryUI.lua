@@ -467,13 +467,17 @@ function ES:CreateInventoryPage(page)
   page.action:SetScript("OnClick", function()
     -- (la sección "Vender al vendedor", la misma que la ventana del vendedor: no lo
     -- que no tiene precio de AH ni la AH arriesgada)
-    local n = 0
-    for _, e in ipairs(Inventory:Sections().vendor) do
-      ES.Ledger:SellToVendor(e.itemID, e.vendorN)
-      n = n + 1
-    end
-    ES:Print(string.format(L["Vendidos %d objetos al vendedor."], n))
-    C_Timer.After(0.8, function() ES:RenderInventory() end)
+    local list, total = Inventory:Sections().vendor, 0
+    if #list == 0 then return end
+    for _, e in ipairs(list) do total = total + (e.vendorN or 0) * (e.vendorUnit or 0) end
+    -- Pregunta antes (ES:Confirm, UI.lua; se quita con su casilla o en /cj opciones, Inventario)
+    ES:Confirm({ key = "noInventorySellConfirm", title = L["Vender al vendedor"],
+      text = string.format(L["¿Vender %d objetos al vendedor por %s?"], #list, ES.Money(total)),
+      onYes = function()
+        for _, e in ipairs(list) do ES.Ledger:SellToVendor(e.itemID, e.vendorN) end
+        ES:Print(string.format(L["Vendidos %d objetos al vendedor."], #list))
+        C_Timer.After(0.8, function() ES:RenderInventory() end)
+      end })
   end)
   page.action:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")

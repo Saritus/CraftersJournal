@@ -343,25 +343,11 @@ do
   local f = CreateFrame("Frame")
   for _, e in ipairs({ "TRAINER_SHOW", "TRAINER_UPDATE", "PLAYER_ENTERING_WORLD",
     "MERCHANT_SHOW", "MERCHANT_CLOSED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
-    "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_AUCTION_CREATED", "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE",
-    "COMMODITY_PURCHASE_SUCCEEDED", "COMMODITY_PURCHASE_FAILED", "BAG_UPDATE_DELAYED" }) do
+    "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_AUCTION_CREATED", "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE" }) do
     ES.SafeRegister(f, e)
   end
   f:SetScript("OnEvent", function(_, event, ...)
     if not ES.db then return end
-    -- Compras de la AH de camino en el correo (ver OnTheWay)
-    if event == "COMMODITY_PURCHASE_SUCCEEDED" then
-      local b = Ledger.buying
-      Ledger.buying = nil
-      if b then Ledger:NoteOnTheWay(b.itemID, b.qty) end
-      return
-    elseif event == "COMMODITY_PURCHASE_FAILED" then
-      Ledger.buying = nil
-      return
-    elseif event == "BAG_UPDATE_DELAYED" then
-      Ledger:SettleOnTheWay()
-      return
-    end
     -- Respuesta de la AH al anuncio pendiente (ver PostOnAH): creada, o un error en rojo
     if Ledger.pendingPost then
       if event == "AUCTION_HOUSE_AUCTION_CREATED" then
@@ -392,15 +378,14 @@ do
     end
     if event == "AUCTION_HOUSE_CLOSED" then Ledger.ahBusy = nil end
     if event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED" or event == "AUCTION_HOUSE_SHOW" or event == "AUCTION_HOUSE_CLOSED" then
-      -- (la AH puede cargarse tarde: el gancho de las compras se pone al abrirla)
-      if event == "AUCTION_HOUSE_SHOW" then pcall(Ledger.InstallPurchaseHook, Ledger) end
       -- La vista Profit cambia sus clics (vender al vendedor, anunciar en la AH)
       if ES.RefreshAfterBags then ES:RefreshAfterBags() end
     elseif event == "TRAINER_SHOW" or event == "TRAINER_UPDATE" then
       local ok, err = pcall(event == "TRAINER_SHOW" and Ledger.ReadAllTrainerServices or Ledger.ReadTrainer, Ledger)
       if not ok then Log("instructor: error leyendo precios: " .. tostring(err)) end
     elseif event == "PLAYER_ENTERING_WORLD" then
-      ES.db.mailBought = nil -- compras de la AH "en el correo" (ya no se cuentan)
+      -- Compras de la AH "en el correo" de versiones anteriores: ya no se cuentan
+      ES.db.mailBought, ES.db.ahOnWay = nil, nil
     end
   end)
 end
@@ -457,76 +442,14 @@ function Ledger.PostPrice(unit)
 end
 
 ---------------------------------------------------------------------------
--- Compras de la AH de camino: en Forever llegan por correo, así que hasta recogerlas
--- no están en las bolsas y la lista de compra seguía pidiéndolas. Se apuntan al
--- confirmar la compra (ConfirmCommoditiesPurchase + COMMODITY_PURCHASE_SUCCEEDED) y
--- se descuentan cuando esas unidades entran en las bolsas. No se lee el buzón: el
--- contador antiguo ("87 en el correo") lo leía y se quedaba desfasado al recoger y
--- gastar. ES.db.ahOnWay[itemID] = { n = de camino, last = en bolsas, t = hora }
+-- Lo que tienes para la lista de compra: lo que llevas en las bolsas. No se mira el
+-- correo: lo comprado en la AH cuenta cuando lo recoges. Antes se apuntaba lo comprado
+-- "de camino" (ES.db.ahOnWay) y se descontaba al recogerlo, pero si se perdía un
+-- descuento se quedaba pegado (Discord: "48 en el correo" sin nada en el buzón): se
+-- quitó, y lo guardado se borra al entrar (ver arriba, PLAYER_ENTERING_WORLD)
 ---------------------------------------------------------------------------
-local ONWAY_MAX_AGE = 30 * 24 * 3600 -- el correo de la AH caduca a los 30 días
-
-local function OnWayTable()
-  if type(ES.db.ahOnWay) ~= "table" then ES.db.ahOnWay = {} end
-  return ES.db.ahOnWay
-end
-
--- Unidades de `itemID` compradas en la AH que aún no han llegado a las bolsas
-function Ledger:OnTheWay(itemID)
-  local e = ES.db and type(ES.db.ahOnWay) == "table" and ES.db.ahOnWay[itemID]
-  if not e then return 0 end
-  if time() - (e.t or 0) > ONWAY_MAX_AGE then
-    ES.db.ahOnWay[itemID] = nil
-    return 0
-  end
-  return e.n or 0
-end
-
--- Apunta una compra confirmada
-function Ledger:NoteOnTheWay(itemID, qty)
-  if not (itemID and qty and qty > 0) then return end
-  local t = OnWayTable()
-  local e = t[itemID] or { n = 0 }
-  e.n = e.n + qty
-  e.last = ES:ItemCount(itemID)
-  e.t = time()
-  t[itemID] = e
-  if ES.RenderShopping then ES:RenderShopping() end
-end
-
--- Lo que entra en las bolsas de lo comprado se descuenta (recoges el correo). Si
--- baja (lo gastas), solo se anota: lo de camino sigue de camino
-function Ledger:SettleOnTheWay()
-  if not (ES.db and type(ES.db.ahOnWay) == "table") then return end
-  local changed = false
-  for itemID, e in pairs(ES.db.ahOnWay) do
-    local cur = ES:ItemCount(itemID)
-    local got = cur - (e.last or cur)
-    if got > 0 then
-      e.n = math.max(0, (e.n or 0) - got)
-      changed = true
-    end
-    e.last = cur
-    if e.n <= 0 or time() - (e.t or 0) > ONWAY_MAX_AGE then ES.db.ahOnWay[itemID] = nil changed = true end
-  end
-  if changed and ES.RenderShopping then ES:RenderShopping() end
-end
-
--- La compra que Blizzard está confirmando (su botón "Comprar ahora")
-function Ledger:InstallPurchaseHook()
-  local AH = C_AuctionHouse
-  if not (hooksecurefunc and AH and AH.ConfirmCommoditiesPurchase) or AH.ConfirmCommoditiesPurchase == Ledger.hookedConfirm then return end
-  hooksecurefunc(AH, "ConfirmCommoditiesPurchase", function(itemID, quantity)
-    Ledger.buying = { itemID = itemID, qty = quantity }
-  end)
-  Ledger.hookedConfirm = AH.ConfirmCommoditiesPurchase
-end
-pcall(Ledger.InstallPurchaseHook, Ledger)
-
--- Lo que tienes para la lista de compra: tus bolsas y lo comprado en la AH que aún
--- está en el correo
 function ES:HaveForShopping(itemID)
-  return (self:ItemCount(itemID) or 0) + Ledger:OnTheWay(itemID)
+  return self:ItemCount(itemID) or 0
 end
 
 -- AH ocupada: cada cuánto se repite el aviso y cuándo se olvida un intento viejo (s)

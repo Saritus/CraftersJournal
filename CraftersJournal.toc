@@ -72,3 +72,6 @@ DevTools.lua
 #@do-not-package@
 Assistant.lua
 #@end-do-not-package@
+#@do-not-package@
+Data\Bankers.lua
+#@end-do-not-package@

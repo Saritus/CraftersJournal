@@ -522,7 +522,10 @@ function WP.HoverRow(row)
     end)
   end
   hover.row = row
-  hover:SetFrameStrata(row:GetFrameStrata())
+  -- (row.hoverStrata: una capa por encima de la de la fila. El asistente la usa: su banner
+  -- va en DIALOG y, solo con el nivel, a veces quedaba encima del botón y tu clic no
+  -- lanzaba la macro de la estrella)
+  hover:SetFrameStrata(row.hoverStrata or row:GetFrameStrata())
   hover:SetFrameLevel(row:GetFrameLevel() + 5)
   hover:ClearAllPoints()
   -- Sin tapar la ✕ de la fila (ni los botones de la esquina del asistente: row.hoverInset)
@@ -551,6 +554,7 @@ function WP.Target(kind, a, b)
     if kind == "trainer" then return WP.Nearest(WP.Trainers(a, b)) end
     if kind == "auction" then return WP.Nearest(ES.Data.Auctioneers) end
     if kind == "sell" then return WP.Nearest(ES.Data.SellVendors) end
+    if kind == "bank" then return WP.Nearest(ES.Data.Bankers or {}) end -- (Data/Bankers.lua: asistente)
     return WP.Nearest(WP.Vendors(a))
   end
 end

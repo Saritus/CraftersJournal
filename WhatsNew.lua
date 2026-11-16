@@ -192,8 +192,21 @@ local function CreateWindow()
   f.ok:SetSize(160, 26)
   f.ok:SetPoint("BOTTOM", 0, 16)
   f.ok:SetScript("OnClick", function() f:Hide() end)
+  -- "No volver a mostrar": apaga la ventana en las próximas versiones (ES.db.noWhatsNew;
+  -- se vuelve a encender en /cj opciones, General). Se aplica al cerrarla
+  f.never = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+  f.never:SetSize(24, 24)
+  f.never:SetPoint("BOTTOMLEFT", 16, 17)
+  f.neverLabel = UI.Label(f, "", "GameFontHighlightSmall")
+  f.neverLabel:SetPoint("LEFT", f.never, "RIGHT", 2, 1)
+  f:SetScript("OnHide", function()
+    if f.never:GetChecked() and not f.isDev and not ES.db.noWhatsNew then
+      ES.db.noWhatsNew = true
+      ES:Print(L["Ya no se mostrarán las novedades. Se vuelven a activar en /cj opciones (General)."])
+    end
+  end)
   f.devTag = UI.Label(f, "", "GameFontDisableSmall")
-  f.devTag:SetPoint("BOTTOMLEFT", 18, 22)
+  f.devTag:SetPoint("BOTTOMRIGHT", -18, 22)
   return f
 end
 
@@ -234,6 +247,9 @@ function ES:ShowWhatsNew(notes, dev)
   f.sub:SetText(string.format(L["Crafter's Journal %s: esto es lo nuevo desde la última vez."], notes[1].version))
   f.ok:SetText(L["¡Entendido!"])
   f.devTag:SetText(dev and L["Vista de desarrollo: no cuenta como vista."] or "")
+  f.isDev = dev
+  f.never:SetChecked(false)
+  f.neverLabel:SetText(L["No volver a mostrar"])
   local y, n = 0, 0
   -- Una sola lista, sin cabeceras de versión: si te saltaste versiones, lo de todas
   -- junto, de la más nueva a la más antigua y como mucho MAX_ITEMS (antes una
@@ -290,7 +306,8 @@ function ES:CheckWhatsNew()
   -- para quien empieza. (Los datos del personaje no sirven: se crean al cargar)
   local fresh = not seen and not (db.scans and next(db.scans)) and not db.lastPage
   db.whatsNewSeen = current
-  if fresh then return end
+  -- (apagada en las opciones o con su casilla "No volver a mostrar")
+  if fresh or db.noWhatsNew then return end
   self:ShowWhatsNew(self:WhatsNewSince(seen, current))
 end
 

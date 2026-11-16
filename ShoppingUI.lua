@@ -159,16 +159,13 @@ local function BuildLines(st, ahOpen)
       end
       -- Tramo: lo que cuenta es lo que llevas; en las guardadas, lo comprado desde que la añadiste
       local progress = L["tienes %d de %d"] -- (todas las listas cuentan lo que llevas)
-      -- Lo comprado en la AH que aún está en el correo ya cuenta (Ledger:OnTheWay): se dice
-      local onWay = ES.Ledger and ES.Ledger.OnTheWay and ES.Ledger:OnTheWay(it.itemID) or 0
-      local mail = onWay > 0 and (GREY .. " · " .. string.format(L["%d en el correo"], onWay) .. "|r") or ""
       if e.left == 0 then
         line.title = GREY .. (name or "") .. "|r"
-        line.sub = GREEN .. string.format(progress, e.bought, it.need) .. "|r" .. mail
+        line.sub = GREEN .. string.format(progress, e.bought, it.need) .. "|r"
         line.value = "|TInterface\\RaidFrame\\ReadyCheck-Ready:16|t"
       else
         line.title = string.format("%d× %s", e.left, name or "")
-        line.sub = where .. (e.bought > 0 and (" · " .. string.format(progress, e.bought, it.need)) or "") .. mail
+        line.sub = where .. (e.bought > 0 and (" · " .. string.format(progress, e.bought, it.need)) or "")
         -- Abierta su compra: cuántas hay baratas ahora
         local t = it.source == "ah" and it.itemID == selected and ES.CommodityTiers and ES:CommodityTiers(it.itemID, it.unit)
         if t and t.next and t.cheap < e.left then

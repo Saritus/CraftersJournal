@@ -1,5 +1,9 @@
 # Crafter's Journal
 
+## Unreleased
+
+- **Make Money uses TSM's demand data.** If you have TSM with its desktop app, its sales data for your region becomes one more market sign: how many sell per day and what share of listings actually sell. Low demand on its own marks a recipe "watch"; together with another warning sign, "avoid". Make Money also never suggests crafting more than what sells across the region in 2 days. The market tooltip shows a "Demand (TSM, region)" line and warns when TSM's average sale price is well below the price used here. TSM data only adds caution: your own scans still decide. Without TSM nothing changes, and it can be turned off in the Make Money options.
+
 ## 0.58.0
 
 - **Options in their own window.** A gear next to the language selector opens the addon's options, sorted by category on the left: General and one per tab or window (Shopping list, Auction House, Vendor, Inventory, Make Money). It also has a link to our Discord. "All options" in the gear menu of the windows next to the vendor, the AH and your profession opens it right where that window's options are. The options are no longer in the game's AddOns panel.

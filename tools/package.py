@@ -20,7 +20,7 @@ IGNORE_DIRS = {"tools", "docs", "dist", ".github", ".git", "__pycache__"}
 IGNORE_EXT = {".py", ".md", ".pyc"}
 # Herramientas del desarrollador y el asistente de ruta, que aún no se publica (como
 # en .pkgmeta)
-IGNORE_FILES = {"DevTools.lua", "Assistant.lua"}
+IGNORE_FILES = {"DevTools.lua", "Assistant.lua", "Data/Bankers.lua"}
 IGNORE_PREFIXES = ("Media/Assistant/",)
 # Como BigWigsMods/packager: en el .toc se quita lo que va entre estas dos líneas
 DO_NOT_PACKAGE = re.compile(r"^#@do-not-package@\s*$.*?^#@end-do-not-package@\s*$\n?", re.M | re.S)
@@ -54,7 +54,8 @@ def main():
         toc_out = z.read(f"{NAME}/{NAME}.toc").decode("utf-8")
         assert "DevTools" not in toc_out and f"{NAME}/DevTools.lua" not in z.namelist(), \
             "DevTools.lua se ha colado en el zip"
-        assert "Assistant" not in toc_out and not any("Assistant" in n for n in z.namelist()), \
+        assert "Assistant" not in toc_out and "Bankers" not in toc_out \
+            and not any("Assistant" in n or "Bankers" in n for n in z.namelist()), \
             "el asistente (aún sin publicar) se ha colado en el zip"
     print(f"{dest} ({dest.stat().st_size // 1024} KB, {len(names)} archivos, versión {version})")
 

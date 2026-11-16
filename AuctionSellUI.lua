@@ -44,102 +44,32 @@ end
 
 ---------------------------------------------------------------------------
 -- Confirmar antes de anunciar (todos los sitios que anuncian: esta ventana, el
--- Inventario y la vista Profit). CurseForge: un clic sin querer anunció de golpe lo que
--- acababa de comprar. Con la casilla "No volver a preguntar" se apaga la opción
--- (ES.db.noPostConfirm, Options.lua), que se vuelve a encender en /cj opciones.
--- El anuncio sale del clic en Anunciar: la AH pide un clic del jugador para cada uno
+-- Inventario y la vista Profit), con el diálogo común (ES:Confirm, UI.lua). CurseForge:
+-- un clic sin querer anunció de golpe lo que acababa de comprar. Su casilla "No volver
+-- a mostrar" apaga ES.db.noPostConfirm (Options.lua), que se vuelve a encender en /cj opciones
 ---------------------------------------------------------------------------
-local confirm
-local function ConfirmDialog()
-  if confirm then return confirm end
-  local d = CreateFrame("Frame", "CraftersJournalPostConfirm", UIParent, "BackdropTemplate")
-  confirm = d
-  d:SetSize(380, 170)
-  d:SetPoint("CENTER", 0, 120)
-  d:SetFrameStrata("DIALOG")
-  d:EnableMouse(true)
-  d:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    tile = true, tileSize = 32, edgeSize = 32,
-    insets = { left = 11, right = 12, top = 12, bottom = 11 },
-  })
-  tinsert(UISpecialFrames, "CraftersJournalPostConfirm") -- Escape: cancelar
-  d.title = d:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  d.title:SetPoint("TOP", 0, -20)
-  d.text = d:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  d.text:SetPoint("TOP", d.title, "BOTTOM", 0, -10)
-  d.text:SetWidth(330)
-  d.check = CreateFrame("CheckButton", nil, d, "UICheckButtonTemplate")
-  d.check:SetSize(24, 24)
-  d.check:SetPoint("TOPLEFT", 24, -78)
-  d.checkLabel = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  d.checkLabel:SetPoint("LEFT", d.check, "RIGHT", 2, 1)
-  -- Aviso en naranja (Ctrl+clic: anunciar todas pese a las alertas); oculto si no hay
-  d.warn = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  d.warn:SetPoint("TOP", d.text, "BOTTOM", 0, -6)
-  d.warn:SetWidth(330)
-  d.warn:SetTextColor(1, 0.6, 0.2)
-  d.note = d:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-  d.note:SetPoint("TOPLEFT", d.check, "BOTTOMLEFT", 4, -1)
-  d.note:SetWidth(320)
-  d.note:SetJustifyH("LEFT")
-  d.ok = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
-  d.ok:SetSize(120, 24)
-  d.ok:SetPoint("BOTTOMRIGHT", d, "BOTTOM", -4, 18)
-  d.cancel = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
-  d.cancel:SetSize(120, 24)
-  d.cancel:SetPoint("BOTTOMLEFT", d, "BOTTOM", 4, 18)
-  d.cancel:SetScript("OnClick", function() d.pending = nil d:Hide() end)
-  d.ok:SetScript("OnClick", function()
-    local p = d.pending
-    d.pending = nil
-    d:Hide()
-    if d.check:GetChecked() then
-      ES.db.noPostConfirm = true
-      ES:Print(L["Ya no se pide confirmación al anunciar. Se vuelve a activar en /cj opciones."])
-    end
-    if p then
-      ES.Ledger:PostOnAH(p.itemID, p.n, p.unit, p.hours)
-      if p.done then p.done() end
-    end
-  end)
-  d:Hide()
-  return d
-end
-
 -- Anuncia `n` de `itemID` a `unit` cada uno (`hours` h), preguntando antes si la opción
 -- está activada. `done`: lo que se hace después (repintar). `warn`: aviso que se ve sí o
 -- sí (en el diálogo o, sin confirmación, en el chat): anunciar todas pese a las alertas
-local WARN_H = 40 -- alto extra del diálogo con aviso (dos líneas)
 function Sell.Post(itemID, n, unit, hours, done, warn)
   if not n or n <= 0 then return end
+  local function Post()
+    ES.Ledger:PostOnAH(itemID, n, unit, hours)
+    if done then done() end
+  end
   -- Sin confirmar: una sola unidad (un clic sin querer no hace daño), o si ahora no se
   -- puede (escaneando: PostOnAH ya lo dice)
   if n <= 1 or ES.db.noPostConfirm or (ES.Scanner and ES.Scanner:IsBusy()) then
     if warn and not (ES.Scanner and ES.Scanner:IsBusy()) then ES:Print(warn) end
-    ES.Ledger:PostOnAH(itemID, n, unit, hours)
-    if done then done() end
+    Post()
     return
   end
-  local d = ConfirmDialog()
-  d.pending = { itemID = itemID, n = n, unit = unit, hours = hours, done = done }
-  d.title:SetText(L["Anunciar en la Casa de Subastas"])
-  d.text:SetText(string.format(L["¿Anunciar %d × %s a %s cada uno (%d h)?"], n,
-    (ES.UI.ItemLabel(itemID, "#" .. itemID)), ES.Money(ES.Ledger.PostPrice(unit)), hours or 24))
-  -- (con aviso, el diálogo crece y la casilla baja para dejarle sitio)
-  d.warn:SetText(warn or "")
-  if warn then d.warn:Show() else d.warn:Hide() end
-  local extra = warn and WARN_H or 0
-  d:SetHeight(170 + extra)
-  d.check:ClearAllPoints()
-  d.check:SetPoint("TOPLEFT", 24, -78 - extra)
-  d.check:SetChecked(false)
-  d.checkLabel:SetText(L["No volver a preguntar"])
-  d.note:SetText(L["Se puede volver a activar en /cj opciones (Confirmar antes de anunciar en la AH)."])
-  d.ok:SetText(L["Anunciar"])
-  d.cancel:SetText(CANCEL or L["Cancelar"])
-  d:Show()
+  ES:Confirm({
+    key = "noPostConfirm", title = L["Anunciar en la Casa de Subastas"],
+    text = string.format(L["¿Anunciar %d × %s a %s cada uno (%d h)?"], n,
+      (ES.UI.ItemLabel(itemID, "#" .. itemID)), ES.Money(ES.Ledger.PostPrice(unit)), hours or 24),
+    warn = warn, onYes = Post,
+  })
 end
 
 -- ¿Las alertas dejaron en la AH solo una parte de lo que podrías vender?
