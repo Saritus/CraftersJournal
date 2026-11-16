@@ -1,5 +1,17 @@
 # Crafter's Journal
 
+## 0.58.0
+
+- **Options in their own window.** A gear next to the language selector opens the addon's options, sorted by category on the left: General and one per tab or window (Shopping list, Auction House, Vendor, Inventory, Make Money). It also has a link to our Discord. "All options" in the gear menu of the windows next to the vendor, the AH and your profession opens it right where that window's options are. The options are no longer in the game's AddOns panel.
+- **The vendor is only suggested what isn't worth more on the AH.** Inventory and the vendor window used to suggest selling to the vendor things that sell for more on the AH. Now they only suggest what the AH doesn't want (gray items, or things worth more at the vendor). Items with no reliable AH price are listed apart and can still be sold with a click, but aren't sold automatically.
+- **Auctionator or TSM prices as a backup.** If your scan doesn't have an item from your bags, the price stored by Auctionator or TSM is used to decide whether it goes to the AH or the vendor. Your own scan always comes first, and it can be turned off in the options.
+- **List everything despite the alerts.** When market alerts leave only a few units to list in the AH sell window ("5 of 77"), Ctrl-click lists all of them, warning how much deposit you risk if they don't sell.
+- **Routes explain their second-best recipe.** When another recipe is cheaper in gold but the route doesn't use it, the step says why: learning it for a few crafts isn't worth it, it adds more crafts or an extra step, or the route couldn't be followed in order.
+- **At your rank's cap, the route sends you to train.** When you reach the top of your rank (150 without Expert, for example) without training the next one, the route's current step is now training it, instead of a crafting step that no longer gives points.
+- **"Vendor sales" instead of "Profit".** The route's summary strip called vendor income "Profit". It's now "Vendor sales", and its tooltip explains what it counts and that the Profit view shows what's worth listing on the AH.
+- **Forever hotfixes in the data.** Red Mageweave Bag, Green and Black Silk Pack, and Green and Red Woolen Bag use the new amounts of cloth; Coarse Grinding Stone gives points up to 90 and the Tanning Rack goes gray 15 points earlier; Minor Arcane Elixir and Iron Grenade use their new vendor prices.
+- **Make Money's status line is no longer cut off.** When it's long, it now wraps onto a second line and the list moves down to make room.
+
 ## 0.57.0
 
 - **Vendor prices always come from the game.** The addon used to "learn" what vendors pay from the money you received after selling. When the game paid two sales at once, it could credit everything to one item and learn twice its price (Barbaric Leggings at 63s instead of 31s 51c), so Make Money promised twice the profit. Learning from sales is gone: vendor prices are the game's own, which match what vendors pay, and any price learned by older versions is cleared when you log in.

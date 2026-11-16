@@ -21,7 +21,7 @@ local AH_HOURS_GOOD, AH_HOURS_RISKY = 24, 8
 local DE_MIN_GAIN = 10    -- se avisa de desencantar si deja al menos 10c más que venderlo
 local DE_MIN_PCT = 0.20   -- y un 20% más (es una media: cada desencantamiento sale al azar)
 
--- Objetos de tus bolsas: { [itemID] = { count, bound, noValue } }
+-- Objetos de tus bolsas: { [itemID] = { count, bound, noValue, quality } }
 local function BagContents()
   local items = {}
   local numSlots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
@@ -37,6 +37,7 @@ local function BagContents()
         it.count = it.count + (info and info.stackCount or 1)
         it.bound = it.bound or (info and info.isBound) or nil
         it.noValue = it.noValue or (info and info.hasNoValue) or nil
+        it.quality = it.quality or (info and info.quality) or nil
         items[id] = it
       end
     end
@@ -169,8 +170,19 @@ function Inventory:List()
     local keep = never and it.count or math.min(it.count, need[id] or 0)
     local n = it.count - keep
     local vendor = not it.noValue and ES:VendorSellPrice(id) or 0
-    local e = { itemID = id, count = it.count, keep = keep, never = never, vendorUnit = vendor, vendorN = 0, ahN = 0, value = 0 }
+    -- (sellN: las que se podrían vender; con alertas dudosas solo AH_FEW van a la AH,
+    -- y la ventana junto a la AH ofrece Ctrl+clic para anunciarlas todas)
+    local e = { itemID = id, count = it.count, keep = keep, never = never, vendorUnit = vendor, vendorN = 0, ahN = 0, value = 0, sellN = n }
     local entry = scan and scan.items[id]
+    -- Tu escaneo no lo tiene: el precio de Auctionator o TSM, si lo hay (solo el
+    -- mínimo; Market:AddonPrice). Tu escaneo siempre manda
+    if n > 0 and not it.bound and not (entry and entry.minUnit) then
+      local ext = ES.Market:AddonPrice(id)
+      if ext then
+        entry = { minUnit = ext.price }
+        e.priceSource, e.priceAge = ext.source, ext.age
+      end
+    end
     -- Sin precio en la AH no se ha comparado: que se vea (si no, "al vendedor" parece
     -- que la AH paga menos)
     if n > 0 and not it.bound and not (entry and entry.minUnit) then e.noAH = true end
@@ -183,6 +195,7 @@ function Inventory:List()
       local perUnit, cut = ES.Planner.AuctionCosts(vendor, { hours = e.hours, neutral = ES:IsNeutralAH() })
       local net = listPrice and listPrice * (1 - cut)
       e.fair, e.verdict, e.listPrice, e.ref = fair, verdict, listPrice, fair.ref
+      e.depositUnit = perUnit -- (depósito por unidad: lo que se arriesga anunciándolas todas)
       if fair.ref and entry.minUnit >= fair.ref * RISE then e.rise = entry.minUnit / fair.ref - 1 end
       -- ...pero si no sabemos que se venda (pocos datos, ojo), puede caducar y el
       -- depósito se pierde (el de 8 h: 20% del vendedor, mínimo por subasta): la AH
@@ -203,6 +216,13 @@ function Inventory:List()
       end
     end
     e.vendorN = vendor > 0 and (n - e.ahN) or 0
+    -- Al vendedor solo se propone lo que NO vale para la AH (CurseForge: "me propone
+    -- vender la mitad del inventario, aunque en la AH valga más"). Sin precio de AH no
+    -- se sabe (no escaneaste, o nadie lo vende ahora) y la AH arriesgada sí vale más si
+    -- se vende: ninguno de los dos va a "Vender al vendedor", salen aparte (unsure) y
+    -- se pueden vender con clic. Lo gris (calidad 0) sí: la AH no lo quiere
+    local poor = it.quality == 0
+    if e.vendorN > 0 and e.ahN == 0 and ((e.noAH and not poor) or e.riskyAH) then e.unsure = true end
     e.value = e.ahN * (e.ahUnit or 0) + e.vendorN * vendor
     -- Solo informativo: si desencantarlo (también lo ligado) vale bastante más que
     -- venderlo, se dice en la fila y el tooltip; el addon no desencanta nada
@@ -310,7 +330,10 @@ local function Tooltip(e, noActions)
       GameTooltip:AddLine(L["(lo que te queda tras la comisión de la AH; el depósito se devuelve al venderse)"], 0.6, 0.6, 0.6, true)
       -- De cuándo es ese precio (viejo: en naranja; puede haber bajado)
       local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
-      if scan and scan.time and ES.TimeAgo then
+      if e.priceSource then
+        GameTooltip:AddLine(e.priceAge and e.priceAge > 0 and string.format(L["Precio de %s (hace %d días): tu escaneo no tenía este objeto."], e.priceSource, e.priceAge)
+          or string.format(L["Precio de %s: tu escaneo no tenía este objeto."], e.priceSource), 0.6, 0.6, 0.6, true)
+      elseif scan and scan.time and ES.TimeAgo then
         local old = time() - scan.time > ES.Ledger.OLD_PRICES
         GameTooltip:AddLine(string.format(L["Precio del escaneo de la AH de %s."], ES.TimeAgo(scan.time)),
           old and 1 or 0.6, old and 0.6 or 0.6, old and 0.2 or 0.6, true)
@@ -442,12 +465,12 @@ function ES:CreateInventoryPage(page)
   page.subtitle:SetText(L["Qué vender de tus bolsas, dónde y cuánto sacas. Lo que necesitan tus rutas empezadas se guarda."])
   -- Con el vendedor abierto: vender de golpe todo lo que va al vendedor
   page.action:SetScript("OnClick", function()
+    -- (la sección "Vender al vendedor", la misma que la ventana del vendedor: no lo
+    -- que no tiene precio de AH ni la AH arriesgada)
     local n = 0
-    for _, e in ipairs(Inventory:List()) do
-      if e.vendorN > 0 and e.ahN == 0 then
-        ES.Ledger:SellToVendor(e.itemID, e.vendorN)
-        n = n + 1
-      end
+    for _, e in ipairs(Inventory:Sections().vendor) do
+      ES.Ledger:SellToVendor(e.itemID, e.vendorN)
+      n = n + 1
     end
     ES:Print(string.format(L["Vendidos %d objetos al vendedor."], n))
     C_Timer.After(0.8, function() ES:RenderInventory() end)
@@ -473,13 +496,16 @@ end
 -- vendedor (la sección "vendor") y junto a la AH ("rising" y "ah"). Así enseñan
 -- exactamente lo mismo que la pestaña (antes la del vendedor hacía su propia lista y
 -- proponía el resto "vendedor: 2" de objetos que la pestaña pone en la AH)
--- { rising, ah, vendor, keep, never } de Inventory:List()
+-- { rising, ah, vendor, unsure, keep, never, notWorth } de Inventory:List()
+-- (unsure: sin precio de AH o AH arriesgada; el vendedor los compraría, pero no se
+-- proponen: ni la ventana del vendedor ni "Vender al vendedor" los venden)
 function Inventory:Sections(list)
   list = list or self:List()
-  local s = { rising = {}, ah = {}, vendor = {}, keep = {}, never = {}, notWorth = {} }
+  local s = { rising = {}, ah = {}, vendor = {}, unsure = {}, keep = {}, never = {}, notWorth = {} }
   for _, e in ipairs(list) do
     if e.value > 0 and e.rise and e.ahN > 0 then s.rising[#s.rising + 1] = e
     elseif e.ahN > 0 then s.ah[#s.ah + 1] = e
+    elseif e.unsure then s.unsure[#s.unsure + 1] = e
     elseif e.vendorN > 0 then s.vendor[#s.vendor + 1] = e
     elseif e.riskyAH and not e.never and e.count > e.keep then s.notWorth[#s.notWorth + 1] = e end
     if e.never then s.never[#s.never + 1] = e
@@ -513,7 +539,7 @@ function ES:RenderInventory()
     -- de 1 h con la AH abierta
     page.status:SetText(ES.Ledger:PostPriceWarning())
   elseif not scan then
-    page.status:SetText(ORANGE .. L["Sin escaneo de la AH: solo se cuenta el vendedor. Escanea para ver qué vale más en la AH.|r"])
+    page.status:SetText(ORANGE .. L["Sin escaneo de la AH: al vendedor solo se propone lo gris. Escanea para ver qué vale más en la AH.|r"])
   else
     local mins = math.floor((time() - scan.time) / 60)
     page.status:SetText(mins > 12 * 60 and (ORANGE .. string.format(L["Precios de la AH de hace %d h: escanea antes de anunciar.|r"], math.floor(mins / 60)))
@@ -545,6 +571,7 @@ function ES:RenderInventory()
   Section(L["Ha subido: véndelo ahora"], rising)
   Section(L["Vender en la Casa de Subastas"], ah)
   Section(L["Vender al vendedor"], vendor)
+  Section(L["Sin precio fiable de AH: no se propone al vendedor"], sec.unsure)
   Section(L["Guardar para tus rutas"], keep, "keep")
   Section(L["No compensa venderlo ahora"], sec.notWorth, "notworth")
   Section(L["No se venden"], never, "never")

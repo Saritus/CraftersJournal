@@ -175,6 +175,19 @@ step("pestaÃ±a peleterÃ­a", function()
   log[#log+1] = string.format("     resumen: materiales %s | profit %s | instructor %s | total %s",
     tostring(page.stats.materials._text), tostring(page.stats.profit._text), tostring(page.stats.fees._text), tostring(page.stats.total._text))
   log[#log+1] = "     estado: " .. tostring(page.status._text)
+  -- Las ventas son al vendedor (no "Profit": son ingresos), con tooltip que manda a la
+  -- vista Profit para lo de la AH (CurseForge: "should be called Revenue")
+  do
+    local tip, savedAddL = {}, GameTooltip.AddLine
+    GameTooltip.AddLine = function(_, t) tip[#tip + 1] = tostring(t) end
+    local okTip, errTip = pcall(page.salesHover._scripts.OnEnter, page.salesHover)
+    GameTooltip.AddLine = savedAddL
+    assert(okTip, tostring(errTip))
+    local all = table.concat(tip, "\n")
+    assert(all:find("Ventas al vendedor", 1, true) and all:find("venta segura", 1, true) and all:find("vista Profit", 1, true),
+      "el tooltip de las ventas dice qué cuentan y dónde está lo de la AH: " .. all)
+    log[#log+1] = "     ventas: " .. (tip[#tip] or ""):gsub("|T[^|]+|t", "")
+  end
   assert(#page.viewButtons == 3, "la vista Recetas ya no está dentro de la profesión")
   for _, view in ipairs({ "route", "profit", "shop" }) do
     local b
@@ -1022,7 +1035,7 @@ step("equipo que no fabricas: no se propone vender (opción)", function()
   assert(INV.NeverSell(LOOT, true) == nil and ES.db.neverSell[LOOT] == false, "con clic derecho se puede permitir uno")
   ES.db.neverSell = {}
   -- La casilla: desmarcada, el equipo se propone como lo demás
-  local op = ES:OptionsPanel()
+  local op = ES:OptionsWindow()
   op._scripts.OnShow(op)
   local gcb, ccb, mcb
   for _, cb in ipairs(op.checks) do
@@ -1615,6 +1628,73 @@ step("portada: tarjetas de profesiones", function()
   local curRow
   for _, row in ipairs(page.rows) do if row._shown ~= false and row.title._text == cur.title then curRow = row end end
   log[#log+1] = "     paso actual: " .. tostring(cur.level) .. " · " .. tostring(cur.sub)
+  -- Asistente (Assistant.lua): enseña la MISMA fila actual que la vista Ruta (mismo
+  -- texto y mismo clic), sin la ventana abierta
+  do
+    local A = ES.Assistant
+    local savedSkill, savedKnown, savedCount = ES.GetProfessionSkill, ES.IsRecipeKnown, ES.ItemCount
+    local savedDetected, savedPlan = page.detected, page.plan
+    ES.GetProfessionSkill = function() return newLevel, 300 end
+    ES.IsRecipeKnown = function() return true end
+    ES.ItemCount = function() return 1000000 end
+    local ok, err = pcall(function()
+    page.from, page.detected = newLevel, { rank = newLevel, cap = 300 }
+    page.plan = ES:LockedPlan("Leatherworking") -- (como CalculatePlan con la ruta empezada)
+    ES:RenderPlan(page)
+    local big
+    for _, l in ipairs(page.lines) do if l.current then big = l end end
+    A.Update()
+    local st, f = A.State(), A.Frame()
+    assert(f and f._shown, "con una ruta empezada el asistente debería verse")
+    assert(big and st.line and st.line.title == big.title and st.line.sub == big.sub and st.line.level == big.level,
+      "el asistente no enseña la fila actual de la ruta: " .. tostring(st.line and (st.line.level .. " " .. st.line.sub))
+      .. " / " .. tostring(big and (big.level .. " " .. big.sub)))
+    assert(f.banner.title._text == (big.bannerTitle or big.title), "título del banner: " .. tostring(f.banner.title._text))
+    assert(tostring(big.bannerTitle):find("Fabrica"), "el paso de fabricar del asistente lleva el verbo: " .. tostring(big.bannerTitle))
+    -- (cada pintado crea sus funciones: se compara que sean las de la misma fila)
+    assert(f.banner.onClick == st.line.onClick and f.banner.go == st.line.go
+      and (big.onClick ~= nil) == (st.line.onClick ~= nil) and (big.go ~= nil) == (st.line.go ~= nil), "el clic del banner no es el de la fila")
+    -- ◀ ▶: ojear otro paso no cambia el actual ni deja pulsarlo
+    if #st.steps > st.index then
+      A.Step(1)
+      assert(st.peek == st.index + 1 and f.banner.onClick ~= st.line.onClick and f.banner.go == nil, "ojeando, el banner no debería hacer lo del paso")
+      A.Peek(nil)
+      assert(st.peek == nil and f.banner.onClick == st.line.onClick, "no vuelve al paso actual")
+    end
+    -- ×: cerrado para esta ruta (no vuelve a salir solo); quitarlo de nuevo lo saca
+    A.Close()
+    A.Update()
+    assert(not f._shown, "cerrado para la ruta, no debería volver a salir")
+    ES.db.prof.Leatherworking.assistantHidden = nil
+    A.Update()
+    assert(f._shown, "no vuelve a salir")
+    -- En el tope de tu rango sin el siguiente: lo que toca es entrenarlo (también en la ruta grande)
+    local rk = rebuilt.ranks[1]
+    if rk and rk.cap - 75 < ES.db.prof.Leatherworking.lock.to then
+      local prevCap = rk.cap - 75
+      local lvl = math.max(rk.skill, prevCap)
+      ES.GetProfessionSkill = function() return lvl, prevCap end
+      page.from, page.detected = lvl, { rank = lvl, cap = prevCap }
+      ES:RenderPlan(page)
+      local currents, train = 0, nil
+      for _, l in ipairs(page.lines) do if l.current then currents = currents + 1 train = l end end
+      assert(currents == 1 and train.rankCap == rk.cap, "en el tope del rango, el paso actual debería ser entrenar: " .. tostring(train and train.title))
+      A.Update()
+      assert(st.line and st.line.rankCap == rk.cap, "el asistente no dice que entrenes el rango")
+      log[#log+1] = string.format("     asistente en el tope (%d): %s", lvl, tostring(st.line.title):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+    end
+    -- Ruta completada: lo dice y no se cierra
+    ES.GetProfessionSkill = function() return 225, 300 end
+    A.Update()
+    assert(f._shown and st.completed and tostring(f.banner.title._text):find("completada"), "falta la ruta completada en el asistente")
+    log[#log+1] = "     asistente: " .. tostring(big.bannerTitle) .. " · " .. #st.steps .. " pasos"
+    end)
+    -- (se deja todo como estaba aunque falle: si no, fallan las pruebas de después)
+    ES.GetProfessionSkill, ES.IsRecipeKnown, ES.ItemCount = savedSkill, savedKnown, savedCount
+    page.from, page.detected, page.plan = newLevel, savedDetected, savedPlan
+    ES.db.prof.Leatherworking.assistantHidden = nil
+    if not ok then error(err, 0) end
+  end
   ES.DetectSkill = savedDetect
   ES:DetectSkill(page)
   -- Llegar al objetivo no libera la ruta: se queda como completada
@@ -1704,10 +1784,11 @@ step("portada: tarjetas de profesiones", function()
   assert(vp and vp._shown == true and vp.rows[1].entry, "con MERCHANT_SHOW antes de abrirse el vendedor, la ventana no sale")
   log[#log+1] = "     vendedor: la ventana sale aunque MERCHANT_SHOW llegue antes de abrirse el vendedor"
   -- Opciones: la casilla quita la ventana del vendedor al momento, y vuelve al marcarla
-  local op = ES:OptionsPanel()
+  local op = ES:OptionsWindow()
   op._scripts.OnShow(op)
-  local vcb = op.checks[1]
-  assert(vcb.option.key == "noVendorWindow" and vcb:GetChecked(), "la casilla del vendedor sale marcada por defecto")
+  local vcb
+  for _, cb in ipairs(op.checks) do if cb.option.key == "noVendorWindow" then vcb = cb end end
+  assert(vcb and vcb:GetChecked(), "la casilla del vendedor sale marcada por defecto")
   vcb:SetChecked(false)
   vcb._scripts.OnClick(vcb)
   assert(ES.db.noVendorWindow == true and vp._shown == false, "desmarcada, la ventana del vendedor no sale")
@@ -3160,7 +3241,7 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     -- Engranaje junto a la ✕: un menú pequeño con la opción justa de esta ventana
     -- ("No mostrar esta ventana") y, debajo, todas las opciones
     local savedOpen, opened = ES.OpenOptions, false
-    ES.OpenOptions = function() opened = true end
+    ES.OpenOptions = function(_, cat) opened = cat or true end
     assert(sp.optionsGear, "la ventana de vender tiene el engranaje de opciones")
     sp.optionsGear._scripts.OnClick(sp.optionsGear)
     local menu = sp.optionsGear.menu
@@ -3169,7 +3250,7 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     assert(tostring(menu.title._text):find("Vender en la AH"), "el menú dice qué ventana es: " .. tostring(menu.title._text))
     assert(tostring(menu.off._text):find("No mostrar"), "botón para quitarla: " .. tostring(menu.off._text))
     menu.all._scripts.OnClick(menu.all)
-    assert(opened and menu._shown == false, "Todas las opciones: abre el panel y cierra el menú")
+    assert(opened == "auction" and menu._shown == false, "Todas las opciones: abre la ventana en su categoría y cierra el menú: " .. tostring(opened))
     sp.optionsGear._scripts.OnClick(sp.optionsGear)
     menu.off._scripts.OnClick(menu.off)
     assert(ES.db.noAuctionSellWindow == true and sp._shown == false and menu._shown == false,
@@ -3233,6 +3314,62 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     upRow._scripts.OnClick(upRow, "LeftButton")
     assert(posted and posted[1] == UP and posted[2] == 1, "Mayús+clic en la ventana de la AH: anunciar solo 1")
     IsShiftKeyDown = savedShift
+    -- Alertas dudosas (ojo): solo unas pocas de las que tienes (Discord: "¿por qué 5 Turtle
+    -- Meat si tengo muchas?"). La fila dice "5 de 40", el tooltip por qué, y Ctrl+clic
+    -- anuncia todas avisando del riesgo (en el chat sin confirmación; en el diálogo con ella)
+    do
+      local savedList, savedCtrl, savedPrintW = ES.AuctionSell.List, IsControlKeyDown, ES.Print
+      local few = { itemID = UP, count = 40, keep = 0, sellN = 40, ahN = 5, vendorN = 35, vendorUnit = 10,
+        ahUnit = 150, listPrice = 158, hours = 8, verdict = "watch", depositUnit = 4, value = 0 }
+      ES.AuctionSell.List = function() return { few } end
+      ES.AuctionSell:Refresh()
+      local row = sp.rows[1]
+      local qty = tostring(row.qty._text)
+      assert(row.entry == few and qty:find("5 de 40", 1, true), "la fila dice de cuántas: " .. qty)
+      assert(tostring(sp.hint._text):find("Ctrl", 1, true), "abajo, qué hace Ctrl+clic: " .. tostring(sp.hint._text))
+      -- (Market.Signals está simulado sin sus cifras: su sección del tooltip, fuera)
+      local tip, savedAddL, savedAddD, savedMkt = {}, GameTooltip.AddLine, GameTooltip.AddDoubleLine, ES.Market.AddToTooltip
+      GameTooltip.AddLine = function(_, t) tip[#tip + 1] = tostring(t) end
+      GameTooltip.AddDoubleLine = function(_, a, b) tip[#tip + 1] = tostring(a) .. " | " .. tostring(b) end
+      ES.Market.AddToTooltip = function() end
+      local okTip, errTip = pcall(row._scripts.OnEnter, row)
+      GameTooltip.AddLine, GameTooltip.AddDoubleLine, ES.Market.AddToTooltip = savedAddL, savedAddD, savedMkt
+      if not okTip then ES.AuctionSell.List = savedList error(errTip) end
+      local all = table.concat(tip, "\n")
+      assert(all:find("para probar", 1, true) and all:find("Ctrl+clic: anunciar las 40", 1, true),
+        "el tooltip explica por qué 5 y qué hace Ctrl+clic: " .. all)
+      -- Ctrl+clic sin confirmación (noPostConfirm, arriba): las 40, con el aviso en el chat
+      local printed = {}
+      ES.Print = function(_, m) printed[#printed + 1] = tostring(m) end
+      IsShiftKeyDown, IsControlKeyDown = function() return false end, function() return true end
+      posted = nil
+      row._scripts.OnClick(row, "LeftButton")
+      assert(posted and posted[2] == 40, "Ctrl+clic: todas (" .. tostring(posted and posted[2]) .. ")")
+      assert(printed[1] and printed[1]:find("alertas", 1, true) and printed[1]:find("depósito", 1, true),
+        "Ctrl+clic avisa en el chat del riesgo: " .. tostring(printed[1]))
+      -- Con confirmación: el aviso va en el diálogo
+      ES.db.noPostConfirm, posted = nil, nil
+      row._scripts.OnClick(row, "LeftButton")
+      local dlg = CraftersJournalPostConfirm
+      assert(dlg._shown and not posted and tostring(dlg.warn._text):find("alertas", 1, true), "el diálogo avisa: " .. tostring(dlg.warn._text))
+      dlg.ok._scripts.OnClick(dlg.ok)
+      assert(posted and posted[2] == 40, "confirmado: las 40")
+      -- Un clic normal después: las 5 y sin aviso en el diálogo
+      IsControlKeyDown = function() return false end
+      posted = nil
+      row._scripts.OnClick(row, "LeftButton")
+      assert(dlg._shown and dlg.warn._shown == false and tostring(dlg.text._text):find("5", 1, true), "clic normal: 5 y sin aviso")
+      dlg.cancel._scripts.OnClick(dlg.cancel)
+      ES.db.noPostConfirm = true
+      -- Con "bien" ya van todas a la AH: ni "de 40" ni Ctrl+clic
+      few.verdict, few.ahN = "good", 40
+      ES.AuctionSell:Refresh()
+      assert(not tostring(sp.rows[1].qty._text):find(" de 40", 1, true) and not tostring(sp.hint._text):find("Ctrl", 1, true),
+        "con bien no hay tope: " .. tostring(sp.rows[1].qty._text))
+      ES.AuctionSell.List, IsControlKeyDown, ES.Print, IsShiftKeyDown = savedList, savedCtrl, savedPrintW, savedShift
+      ES.AuctionSell:Refresh()
+      log[#log+1] = "     ventana de la AH, con ojo: " .. qty:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T[^|]+|t", "") .. " · Ctrl+clic anuncia las 40 avisando"
+    end
     -- Abajo, una línea por acción
     local hint = tostring(sp.hint._text)
     assert(hint:find("Clic") and hint:find("Mayús") and hint:find("derecho") and select(2, hint:gsub("\n", "")) >= 2,
@@ -3255,8 +3392,8 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     ES:SetOption("noAuctionWindows", true)
     assert(ES.db.noAuctionWindows == nil, "la lista de compra, activada otra vez")
     local sellOpt
-    for _, cb in ipairs(ES:OptionsPanel().checks) do if cb.option.key == "noAuctionSellWindow" then sellOpt = cb.option end end
-    assert(sellOpt, "la opción de la ventana de vender está en el panel")
+    for _, cb in ipairs(ES:OptionsWindow().checks) do if cb.option.key == "noAuctionSellWindow" then sellOpt = cb.option end end
+    assert(sellOpt and sellOpt.cat == "auction", "la opción de la ventana de vender está en la categoría Casa de Subastas")
     ES:SetOption("noAuctionSellWindow", false)
     assert(sp._shown == false and ES.db.noAuctionSellWindow == true, "desactivada, la ventana de vender no sale")
     ES:SetOption("noAuctionSellWindow", true)
@@ -3624,6 +3761,9 @@ step("novedades: una vez por versión, y en vista de desarrollo cuando quieras",
   -- Lo publicado no lleva DevTools.lua: su línea del .toc va en #@do-not-package@
   assert(TOC_TEXT:find("#@do%-not%-package@%s+DevTools%.lua%s+#@end%-do%-not%-package@"),
     "DevTools.lua debe ir dentro de #@do-not-package@ en el .toc")
+  -- El asistente de ruta aún no se publica: también dentro de #@do-not-package@
+  assert(TOC_TEXT:find("#@do%-not%-package@%s+Assistant%.lua%s+#@end%-do%-not%-package@"),
+    "Assistant.lua debe ir dentro de #@do-not-package@ en el .toc hasta que se publique")
   GetAddOnMetadata = savedGet
   ES.db.whatsNewSeen, ES.db.scans, ES.db.lastPage, ES.db.devTools = savedSeen, savedScans, savedPage, savedDev
   log[#log+1] = "     novedades: una vez por versión, nada en instalaciones nuevas, /cj whatsnew solo en la copia de desarrollo"
@@ -3665,15 +3805,23 @@ step("ruta: la segunda mejor receta de cada paso y por qué es peor", function()
     local list = plan.alts[i]
     assert(list, "paso " .. i .. " sin lista de alternativas")
     if list[1] then withAlt = withAlt + 1 end
-    if list[1] and list[1].delta < -0.5 then
-      cheaper = cheaper + 1
-      local st, a = plan.steps[i], list[1]
-      log[#log+1] = string.format("       más barata en %d-%d: %s %+.0fc, %s fabricaciones frente a %s (ruta: %s)", st.from, st.to,
-        ES.Data.Leatherworking.recipes[a.id].name, a.delta, ES.Num(a.step.expected), ES.Num(st.expected), st.recipe.name)
+    for _, a in ipairs(list) do
+      -- La vara de la ruta (RouteScore) y el veredicto, en todas
+      assert(type(a.score) == "number", "alternativa sin puntuación de ruta")
+      local v = ES.Planner.AlternativeVerdict(plan, plan.steps[i], a)
+      if a.delta <= -0.5 or a.score <= -0.5 then
+        assert(v, "más barata sin veredicto")
+        local st = plan.steps[i]
+        log[#log+1] = string.format("       %s en %d-%d: %s oro %+.0fc, vara %+.0fc (ruta: %s)", v, st.from, st.to,
+          ES.Data.Leatherworking.recipes[a.id].name, a.delta, a.score, st.recipe.name)
+      else
+        assert(v == nil, "veredicto sin ser más barata: " .. tostring(v))
+      end
     end
-    for k = 2, #list do assert(list[k].delta >= list[k - 1].delta, "alternativas sin ordenar") end
+    if list[1] and ES.Planner.AlternativeVerdict(plan, plan.steps[i], list[1]) == "better" then cheaper = cheaper + 1 end
+    for k = 2, #list do assert(list[k].score >= list[k - 1].score, "alternativas sin ordenar") end
   end
-  log[#log+1] = string.format("     %d pasos: %d con segunda opción, %d con una más barata que la ruta (%d fotogramas)", #plan.steps, withAlt, cheaper, ticks)
+  log[#log+1] = string.format("     %d pasos: %d con segunda opción, %d con una mejor que la ruta (%d fotogramas)", #plan.steps, withAlt, cheaper, ticks)
   assert(withAlt > 0, "ningún paso con segunda opción")
   -- La fila del paso lo dice; el tooltip, las cifras y el motivo
   ES:RenderPlan(page)
@@ -4378,6 +4526,238 @@ step("un punto de arma o defensa no hace trabajar al addon", function()
   ES.GetProfessionSkill, ES.RefreshAfterSkill, ES.CheckCraftStop, C_Timer.After = savedSkill, savedAfter, savedStop, savedTimer
   log[#log+1] = "     40 puntos de arma/defensa: 0 trabajo; 1 punto de Peletería: se refresca"
 end)
+step("opciones: engranaje de la cabecera y categorías", function()
+  local f = CraftersJournalMainFrame
+  assert(f and f.optionsButton, "la cabecera tiene el engranaje de opciones")
+  -- Nada en las opciones del juego: solo la ventana del addon
+  for i, src in ipairs(SOURCES) do
+    if not SOURCE_NAMES[i]:find("^Libs") then
+      assert(not src:find("RegisterAddOnCategory", 1, true) and not src:find("InterfaceOptions_AddCategory", 1, true),
+        SOURCE_NAMES[i] .. " registra opciones en las del juego")
+    end
+  end
+  -- (el mock dice siempre que está visible: aquí, lo que diga Show/Hide)
+  local w = ES:OptionsWindow()
+  w._shown = false
+  w.IsShown = function(self) return self._shown == true end
+  f.optionsButton._scripts.OnClick(f.optionsButton)
+  assert(w._shown == true, "el engranaje abre la ventana de opciones")
+  w._scripts.OnShow(w)
+  assert(w.selected == "general" and w.pages.general._shown == true and w.heading._text == ES.L["General"],
+    "se abre en General: " .. tostring(w.selected))
+  -- Abajo de las categorías: la versión y la invitación al Discord
+  local savedVer = ES.AddonVersion
+  ES.AddonVersion = function() return "9.8.7" end
+  w._scripts.OnShow(w)
+  ES.AddonVersion = savedVer
+  assert(tostring(w.version._text):find("9.8.7", 1, true), "la versión, abajo de las categorías: " .. tostring(w.version._text))
+  assert(w.discordButton.title._text == ES.L["Únete a nuestro Discord"], "la invitación al Discord: " .. tostring(w.discordButton.title._text))
+  w.discordButton._scripts.OnClick(w.discordButton)
+  local dlg = CraftersJournalReportDialog
+  dlg._scripts.OnShow(dlg)
+  assert(dlg.kind == "join" and dlg.title._text == ES.L["Únete a nuestro Discord"] and dlg.box._text == ES.DISCORD_URL,
+    "el botón del Discord abre el enlace para copiarlo: " .. tostring(dlg.title._text))
+  ES:ShowReportDialog()
+  dlg._scripts.OnShow(dlg)
+  assert(dlg.title._text == ES.L["Informar de un error"], "Informar sigue abriendo lo de los errores")
+  dlg:Hide()
+  local tip, savedAddL = {}, GameTooltip.AddLine
+  GameTooltip.AddLine = function(_, t) tip[#tip + 1] = tostring(t) end
+  f.optionsButton._scripts.OnEnter(f.optionsButton)
+  GameTooltip.AddLine = savedAddL
+  assert(tip[1] == ES.L["Opciones"], "el tooltip del engranaje: " .. table.concat(tip, " | "))
+  -- Cada opción, en una categoría que existe; ninguna categoría vacía; todas en la ventana
+  local count = {}
+  for _, c in ipairs(ES.OPTION_CATEGORIES) do count[c.key] = 0 end
+  for _, o in ipairs(ES.OPTIONS) do
+    assert(count[o.cat], "opción sin categoría: " .. o.key)
+    count[o.cat] = count[o.cat] + 1
+  end
+  for k, n in pairs(count) do assert(n > 0, "categoría sin opciones: " .. k) end
+  assert(#w.checks == #ES.OPTIONS and #w.categoryButtons == #ES.OPTION_CATEGORIES, "todas las opciones y categorías en la ventana")
+  -- Cambiar de categoría: se ve solo la suya, con su nombre arriba y marcada a la izquierda
+  local ab
+  for _, b in ipairs(w.categoryButtons) do if b.key == "auction" then ab = b end end
+  ab._scripts.OnClick(ab)
+  assert(w.selected == "auction" and w.pages.auction._shown == true and w.pages.general._shown == false,
+    "al pulsar Casa de Subastas se ve su página")
+  assert(w.heading._text == ES.L["Casa de Subastas"], "el título de la derecha: " .. tostring(w.heading._text))
+  for _, b in ipairs(w.categoryButtons) do
+    assert(b.sel._shown == (b.key == "auction"), "solo la categoría elegida sale marcada: " .. b.key)
+  end
+  -- Su casilla funciona como antes (mismo sitio en ES.db)
+  local savedPC = ES.db.noPostConfirm
+  local pc
+  for _, cb in ipairs(w.pages.auction.checks) do if cb.option.key == "noPostConfirm" then pc = cb end end
+  assert(pc and pc:GetChecked() == not savedPC, "la casilla de confirmar, en Casa de Subastas y con su valor")
+  pc:SetChecked(false)
+  pc._scripts.OnClick(pc)
+  assert(ES.db.noPostConfirm == true, "desmarcada, se guarda como antes")
+  pc:SetChecked(true)
+  pc._scripts.OnClick(pc)
+  assert(ES.db.noPostConfirm == nil, "marcada otra vez, se quita")
+  ES.db.noPostConfirm = savedPC
+  -- /cj opciones abre la ventana (en la última categoría); OpenOptions con categoría, en esa
+  w:Hide()
+  SlashCmdList.CRAFTERSJOURNAL("opciones")
+  assert(w._shown == true and w.selected == "auction", "/cj opciones abre la ventana")
+  ES:OpenOptions(ES:OptionCategory("noVendorWindow"))
+  assert(w.selected == "vendor" and w.pages.vendor._shown == true and w.pages.auction._shown == false,
+    "se abre en la categoría pedida: " .. tostring(w.selected))
+  -- Esquina para escalar, como la ventana principal; su escala va aparte
+  assert(w.resize and w.resize ~= f.resize, "la ventana de opciones tiene su esquina para escalar")
+  local savedFS, savedOS = ES.db.frameScale, ES.db.optionsScale
+  ES.db.frameScale = 1.3
+  w.resize._scripts.OnDoubleClick(w.resize)
+  assert(ES.db.optionsScale == 1 and ES.db.frameScale == 1.3, "doble clic: tamaño normal, solo el de las opciones")
+  ES.db.frameScale, ES.db.optionsScale = savedFS, savedOS
+  -- El engranaje otra vez: se cierra
+  f.optionsButton._scripts.OnClick(f.optionsButton)
+  assert(w._shown == false, "el engranaje cierra la ventana si está abierta")
+  w.IsShown = nil
+  log[#log+1] = "     opciones: engranaje, " .. #ES.OPTION_CATEGORIES .. " categorías, " .. #ES.OPTIONS .. " casillas"
+end)
+-- El banner del asistente por sí solo (con unas filas de ruta de mentira): nivel,
+-- textos cortos, ◀ ▶ y cerrar. Antes de "métodos de marcos": así también se comprueban los suyos
+step("asistente: banner, nivel y flechas", function()
+  local A = ES.Assistant
+  local saved = { ES.RouteLock, ES.RouteLines, ES.GetProfessionSkill, ES.db.prof }
+  local lock = { from = 200, to = 230, started = 12345 }
+  local clicked = 0
+  ES.db.prof = { Tailoring = {} }
+  ES.RouteLock = function(_, k) return k == "Tailoring" and lock or nil end
+  ES.RouteLines = function() return {
+    { level = "200–226", title = "Hecho", done = true },
+    { level = "226–230", title = "Brightcloth Robe", bannerTitle = "Fabrica 4× Brightcloth Robe",
+      sub = "4 fabricaciones · 2g/u · 2ª: otra", bannerSub = "4 fabricaciones · ~4 min", current = true,
+      icon = 134400, onClick = function() clicked = clicked + 1 end },
+    { level = "230", title = "Entrenar Artesano", go = function() return nil end, icon = 134400 },
+    { total = true, title = "Total" },
+  } end
+  ES.GetProfessionSkill = function() return 227, 230 end
+  local ok, err = pcall(function()
+    A.Update()
+    local f, st = A.Frame(), A.State()
+    assert(f._shown, "con una ruta empezada el asistente debería verse")
+    assert(f.banner.level._text == "226–230", "falta el nivel del paso: " .. tostring(f.banner.level._text))
+    assert(f.banner.title._text == "Fabrica 4× Brightcloth Robe", "título: " .. tostring(f.banner.title._text))
+    assert(f.banner.sub._text == "4 fabricaciones · ~4 min", "el asistente no debería enseñar precios: " .. tostring(f.banner.sub._text))
+    assert(#st.steps == 3 and st.index == 2, "pasos del asistente (sin el total)")
+    assert(f.arrows.prev and f.arrows.next and not f.strip and not f.arrows.bar, "solo ◀ ▶ a los lados, sin barra")
+    f.banner._scripts.OnClick(f.banner, "LeftButton")
+    assert(clicked == 1, "el clic del banner no hizo lo de la fila")
+    f.arrows.next._scripts.OnClick(f.arrows.next)
+    assert(st.peek == 3 and f.banner.level._text:find("230") and f.banner.onClick ~= nil and f.banner.go == nil,
+      "ojeando el paso siguiente no se ve su nivel o deja hacer lo del paso")
+    f.arrows.prev._scripts.OnClick(f.arrows.prev)
+    assert(st.peek == nil and f.banner.title._text == "Fabrica 4× Brightcloth Robe", "no vuelve al paso actual")
+    f.close._scripts.OnClick(f.close)
+    assert(not f._shown and ES.db.prof.Tailoring.assistantHidden == lock.started, "la X no lo cierra para esta ruta")
+    A.Update()
+    assert(not f._shown, "cerrado para la ruta, no debería volver a salir")
+    lock.started = 99999 -- otra ruta: vuelve a salir
+    A.Update()
+    assert(f._shown, "con otra ruta debería volver a salir")
+    log[#log+1] = "     asistente: " .. f.banner.level._text .. " · " .. f.banner.title._text .. " · " .. f.banner.sub._text
+  end)
+  ES.RouteLock, ES.RouteLines, ES.GetProfessionSkill, ES.db.prof = saved[1], saved[2], saved[3], saved[4]
+  if A.Frame() then A.Frame():Hide() end
+  if not ok then error(err, 0) end
+end)
+-- Filas de compra de la ruta empezada (ProfessionUI.lua, AddBuyLines): lo que falta del
+-- tramo (lo mismo que la vista Materiales), cuándo son el paso actual y cuándo solo avisan
+step("ruta: filas de compra (paran al empezar el tramo o sin poder fabricar)", function()
+  local saved = { prof = ES.db.prof, skill = ES.GetProfessionSkill, count = ES.ItemCount, known = ES.IsRecipeKnown,
+    ahOpen = ES.IsAuctionHouseOpen, locked = ES.lockedPlans.Leatherworking }
+  local ok, err = pcall(function()
+    ES.db.prof = { Leatherworking = {} }
+    local plan = ES.Planner:Plan(ES.Data.Leatherworking, ES:PlanOptions("Leatherworking", 120, 225, 300))
+    assert(#plan.steps > 1, "sin ruta de peletería")
+    local lock = { from = 120, to = 225, started = 777 }
+    ES.db.prof.Leatherworking.lock = lock
+    plan.lockStarted, plan.lockPrices = lock.started, lock.scanTime
+    ES.lockedPlans.Leatherworking = plan
+    ES.routeBuyVisits.Leatherworking = nil
+    local level = plan.steps[1].from
+    ES.GetProfessionSkill = function() return level, 300 end
+    ES.IsRecipeKnown = function() return true end
+    ES.IsAuctionHouseOpen = function() return false end
+    local function Lines()
+      local lines = ES:RouteLines("Leatherworking", { buy = true }) -- (las del asistente)
+      local buys, cur, n = {}, nil, 0
+      for _, l in ipairs(lines) do
+        if l.buyRow then buys[#buys + 1] = l end
+        if l.current then cur, n = l, n + 1 end
+      end
+      assert(n <= 1, "más de un paso actual: " .. n)
+      return lines, buys, cur
+    end
+    -- Empieza el tramo con las bolsas vacías: comprar es el paso actual, y lo que falta es
+    -- lo mismo que dice la vista Materiales (RouteBuy)
+    ES.ItemCount = function() return 0 end
+    local _, buys, cur = Lines()
+    assert(buys[1] and cur == buys[1], "al empezar el tramo sin materiales, el paso actual debería ser comprar: " .. tostring(cur and cur.title))
+    local buy = ES.RouteBuy(plan, "Leatherworking", level, { phase = true })
+    local listed = 0
+    for _, b in ipairs(buys) do listed = listed + #b.buyItems end
+    assert(listed == #buy.ah + #buy.vendor, "las filas de compra no piden lo mismo que la vista Materiales")
+    assert(buys[1].go and not buys[1].onClick, "sin la AH ni el vendedor abiertos, el clic marca el camino")
+    -- Solo el asistente: la vista Ruta de la ventana no tiene filas de compra (lo tiene en
+    -- Materiales y la Lista de compra) y su paso actual sigue siendo el suyo
+    local bigCur
+    for _, l in ipairs(ES:RouteLines("Leatherworking")) do
+      assert(not l.buyRow, "la vista Ruta de la ventana no debería tener filas de compra")
+      if l.current then bigCur = l end
+    end
+    assert(bigCur and not (bigCur.sub or ""):find("luego compra"), "la vista Ruta no debería avisar de compras")
+    -- Lista de la ruta quitada de la Lista de compra: la fila lo dice y el clic la vuelve a añadir
+    ES.Shopping.SetRouteListHidden("Leatherworking", true)
+    local _, hiddenBuys = Lines()
+    assert(hiddenBuys[1].readd and hiddenBuys[1].onClick and tostring(hiddenBuys[1].bannerSub):find("Lista de compra"),
+      "con la lista quitada, la fila debería decir que no está y poder añadirla")
+    hiddenBuys[1].onClick()
+    assert(not ES.Shopping.RouteListHidden("Leatherworking"), "el clic no volvió a añadir la lista de la ruta")
+    local _, backBuys = Lines()
+    assert(not backBuys[1].readd and backBuys[1].bannerSub == "", "con la lista ya puesta, la fila va sin subtítulo")
+    -- Y el asistente enseña la de comprar
+    ES.Assistant.Update()
+    assert(ES.Assistant.State().line and ES.Assistant.State().line.buyRow, "el asistente debería decir que compres")
+    ES.Assistant.Frame():Hide()
+    log[#log+1] = "     compra: " .. tostring(buys[1].title):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. " · " .. tostring(buys[1].bannerSub)
+    -- Con la AH abierta, el clic abre la compra
+    ES.IsAuctionHouseOpen = function() return true end
+    local _, buysAH = Lines()
+    for _, b in ipairs(buysAH) do
+      if b.buyRow == "ah" then assert(b.onClick and not b.go, "con la AH abierta, el clic debería abrir la compra") end
+    end
+    ES.IsAuctionHouseOpen = function() return false end
+    -- Con todo comprado: ni filas de compra ni nada que pare
+    ES.ItemCount = function() return 100000 end
+    local _, none, cur2 = Lines()
+    assert(#none == 0 and cur2 and not cur2.buyRow, "con todo comprado no debería haber filas de compra")
+    -- Ya fuiste a comprar (AH y vendedor cerrados con compras pendientes) y puedes fabricar:
+    -- la ruta sigue y el paso avisa de lo que falta
+    ES.ItemCount = function() return 0 end
+    ES.routeBuyVisits.Leatherworking = { key = buy.phase and (buy.phase.steps[1].from .. ":" .. buy.phase.to) or "route", ah = true, vendor = true }
+    local savedCraftable = ES.CraftableFromBags
+    ES.CraftableFromBags = function() return 5 end
+    local _, visitedBuys, cur3 = Lines()
+    assert(visitedBuys[1] and cur3 and not cur3.buyRow, "ya fuiste y puedes fabricar: comprar no debería parar la ruta")
+    assert(tostring(visitedBuys[1].sub):find("No había"), "la fila de compra debería decir que no había suficiente")
+    if cur3.bannerSub then
+      assert(cur3.bannerSub:find("luego compra"), "el paso debería avisar de lo que falta: " .. cur3.bannerSub)
+    end
+    -- ...pero sin poder fabricar ni una, vuelve a ser comprar (nunca te deja sin paso)
+    ES.CraftableFromBags = function() return 0 end
+    local _, _, cur4 = Lines()
+    assert(cur4 and cur4.buyRow, "sin poder fabricar, el paso actual debería ser comprar")
+    ES.CraftableFromBags = savedCraftable
+  end)
+  ES.db.prof, ES.GetProfessionSkill, ES.ItemCount, ES.IsRecipeKnown = saved.prof, saved.skill, saved.count, saved.known
+  ES.IsAuctionHouseOpen, ES.lockedPlans.Leatherworking = saved.ahOpen, saved.locked
+  ES.routeBuyVisits.Leatherworking = nil
+  if not ok then error(err, 0) end
+end)
 step("métodos de marcos que existen en el juego", function()
   local REAL = {}
   for name in ([[
@@ -4396,10 +4776,11 @@ step("métodos de marcos que existen en el juego", function()
     SetStatusBarTexture SetTexCoord SetTextColor SetTexture SetThumbTexture SetToAlpha SetValue
     SetValueStep SetVertexColor SetVerticalScroll SetWidth SetWordWrap StartMoving Stop
     StopMovingOrSizing UnlockHighlight UnregisterAllEvents UpdateScrollChildRect
-    SetGradientAlpha SetRotation CreateMaskTexture AddMaskTexture
+    SetGradientAlpha SetRotation CreateMaskTexture AddMaskTexture SetMaxLines
   ]]):gmatch("%a+") do REAL[name] = true end
   -- (SetGradientAlpha ya no existe en el cliente, pero solo se usa protegida con
-  -- "elseif tex.SetGradientAlpha" para clientes viejos: HomeUI.lua)
+  -- "elseif tex.SetGradientAlpha" para clientes viejos: HomeUI.lua. SetMaxLines, igual:
+  -- "if fs.SetMaxLines then", EarnUI.lua)
   local unknown = {}
   for k in pairs(MOCK_METHODS) do if not REAL[k] then unknown[#unknown + 1] = k end end
   table.sort(unknown)

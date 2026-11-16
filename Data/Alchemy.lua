@@ -135,7 +135,7 @@ ES.Data.Alchemy = {
     [435969] = { name = "Insulating Gniodine", t = { 1, 200, 210, 220 }, scroll = 215434, train = 200, sq = 4, r = { { 3372, 1 }, { 213371, 5 } }, out = { 213372, 1 }, oq = 1 },
     [435971] = { name = "Mildly Irradiated Rejuvenation Potion", t = { 1, 225, 230, 235 }, scroll = 215163, train = 225, sq = 4, r = { { 213371, 1 }, { 2456, 1 }, { 215430, 3 }, { 8925, 5 } }, out = { 215162, 5 }, oq = 1 },
     [1213544] = { name = "Flask of Unyielding Sorrow", t = { 1, 315, 322, 330 }, scroll = 234252, train = 305, sq = 1, r = { { 16203, 1 }, { 234012, 1 }, { 13511, 1 }, { 8925, 1 } }, tool = 12, out = { 233966, 1 }, oq = 1 },
-    [1230564] = { name = "Mana Well", t = { 1, 20, 22, 25 }, fee = 0, train = 20, r = { { 2447, 1 }, { 3371, 1 } }, out = { 279956, 1 }, oq = 1 },
+    [1230564] = { name = "Mana Well", t = { 1, 20, 20, 20 }, fee = 0, train = 20, r = { { 2447, 1 }, { 3371, 1 } }, out = { 279956, 1 }, oq = 1 },
     [1231583] = { name = "Major Discolored Healing Potion", t = { 1, 290, 310, 330 }, fee = 10000, train = 250, tr = { 1937, 249713 }, r = { { 8925, 1 }, { 13466, 1 }, { 730, 1 } }, out = { 241650, 1 }, oq = 1 },
     [1244421] = { name = "Distilled Firewater", t = { 1, 260, 265, 270 }, scroll = 236754, train = 250, sq = 2, r = { { 3819, 4 }, { 8846, 2 }, { 3372, 1 } }, out = { 246948, 1 }, oq = 1 },
     [1244645] = { name = "Lesser Discolored Healing Potion", t = { 1, 85, 105, 125 }, fee = 100, train = 85, tr = { 1937, 249713 }, r = { { 3371, 1 }, { 2450, 1 }, { 730, 1 } }, out = { 247239, 1 }, oq = 1 },
@@ -199,7 +199,7 @@ ES.Data.Alchemy = {
     [1251751] = { name = "Dragonfire Potion", t = { 1, 250, 252, 255 }, scroll = 250997, train = 245, sq = 1, favor = 120, favorRep = 5, r = { { 13465, 2 }, { 4625, 2 }, { 8925, 1 } }, out = { 250953, 1 }, oq = 1 },
     [1251752] = { name = "Potion of Elemental Purging", t = { 1, 285, 287, 290 }, scroll = 250998, train = 280, sq = 1, favor = 180, favorRep = 6, r = { { 4625, 2 }, { 3819, 2 }, { 8925, 1 } }, out = { 250954, 1 }, oq = 1 },
     [1251753] = { name = "Potion of Beast Slaying", t = { 1, 285, 287, 290 }, scroll = 250999, train = 280, sq = 1, r = { { 8846, 2 }, { 13466, 2 }, { 18256, 1 } }, out = { 250955, 1 }, oq = 1 },
-    [1263005] = { name = "Fermenter", t = { 1, 140, 142, 145 }, scroll = 273085, train = 140, sq = 2, r = { { 3372, 1 }, { 3356, 1 }, { 2452, 1 } }, out = { 279970, 1 }, oq = 1 },
+    [1263005] = { name = "Fermenter", t = { 1, 140, 140, 140 }, scroll = 273085, train = 140, sq = 2, r = { { 3372, 1 }, { 3356, 1 }, { 2452, 1 } }, out = { 279970, 1 }, oq = 1 },
     [1293559] = { name = "Flask of Natural Accuracy", t = { 1, 320, 325, 330 }, scroll = 274277, train = 300, sq = 3, r = { { 248822, 1 }, { 248821, 12 }, { 13464, 9 }, { 18256, 1 } }, out = { 274273, 1 }, oq = 2 },
     [1293560] = { name = "Flask of Natural Aggression", t = { 1, 320, 325, 330 }, scroll = 274278, train = 300, sq = 3, r = { { 248822, 1 }, { 248821, 18 }, { 13465, 6 }, { 18256, 1 } }, out = { 274274, 1 }, oq = 2 },
     [1293561] = { name = "Flask of Natural Precision", t = { 1, 320, 325, 330 }, scroll = 274279, train = 300, sq = 3, r = { { 248822, 1 }, { 248823, 12 }, { 13463, 9 }, { 18256, 1 } }, out = { 274275, 1 }, oq = 2 },
@@ -409,7 +409,7 @@ ES.Data.SellPrices[247239] = 25
 ES.Data.SellPrices[247240] = 75
 ES.Data.SellPrices[247241] = 125
 ES.Data.SellPrices[247242] = 250
-ES.Data.SellPrices[247754] = 25
+ES.Data.SellPrices[247754] = 5
 ES.Data.SellPrices[247755] = 25
 ES.Data.SellPrices[248819] = 3000
 ES.Data.SellPrices[248821] = 225

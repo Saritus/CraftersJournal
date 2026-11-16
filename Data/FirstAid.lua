@@ -39,7 +39,7 @@ ES.Data.FirstAid = {
     [23787] = { name = "Powerful Anti-Venom", t = { 1, 300, 330, 360 }, scroll = 19442, train = 300, scrollPrice = 100000, rep = { 529, 5 }, sq = 1, r = { { 19441, 1 } }, out = { 19440, 3 }, oq = 1 },
     [30021] = { name = "Crystal Infused Bandage", t = { 1, 300, 330, 360 }, scroll = 23689, train = 290, sq = 1, r = { { 23567, 1 }, { 14047, 10 } }, out = { 23684, 4 }, oq = 1 },
     [470349] = { name = "Dense Runecloth Bandage", t = { 1, 315, 327, 340 }, scroll = 232434, train = 300, gone = true, sq = 1, r = { { 14530, 2 } }, out = { 232433, 1 }, oq = 1 },
-    [1230117] = { name = "First Aid Kit", t = { 1, 20, 22, 25 }, fee = 100, train = 20, r = { { 1251, 3 }, { 159, 1 } }, out = { 279968, 1 }, oq = 1 },
+    [1230117] = { name = "First Aid Kit", t = { 1, 20, 20, 20 }, fee = 100, train = 20, r = { { 1251, 3 }, { 159, 1 } }, out = { 279968, 1 }, oq = 1 },
     [1244431] = { name = "Minor Healing Potion", t = { 1, 55, 75, 95 }, fee = 100, train = 1, r = { { 3371, 1 }, { 2678, 1 }, { 2447, 1 } }, out = { 118, 1 }, oq = 1 },
     [1244432] = { name = "Lesser Healing Potion", t = { 1, 85, 105, 125 }, fee = 150, train = 55, r = { { 3371, 1 }, { 2678, 2 }, { 2450, 1 } }, out = { 858, 1 }, oq = 1 },
     [1244433] = { name = "Healing Potion", t = { 1, 135, 155, 175 }, fee = 800, train = 110, r = { { 3372, 1 }, { 2692, 1 }, { 2453, 1 } }, out = { 929, 1 }, oq = 1 },
@@ -54,7 +54,7 @@ ES.Data.FirstAid = {
     [1259347] = { name = "Woolen Tourniquet", t = { 1, 120, 155, 190 }, fee = 1200, train = 120, r = { { 2592, 2 }, { 2321, 2 } }, out = { 255720, 1 }, oq = 1 },
     [1259348] = { name = "Leather Tourniquet", t = { 1, 220, 250, 280 }, scroll = 255726, train = 200, sq = 2, r = { { 4304, 2 }, { 4291, 2 } }, out = { 255721, 1 }, oq = 1 },
     [1259349] = { name = "Surgical Tourniquet", t = { 1, 280, 310, 340 }, scroll = 255730, train = 265, sq = 2, r = { { 8170, 2 }, { 14047, 2 }, { 8343, 2 } }, out = { 255722, 1 }, oq = 1 },
-    [1262996] = { name = "Toxin Study", t = { 1, 140, 142, 145 }, scroll = 273105, train = 140, sq = 2, r = { { 6452, 1 }, { 8544, 2 }, { 4470, 2 } }, out = { 279940, 1 }, oq = 1 },
+    [1262996] = { name = "Toxin Study", t = { 1, 140, 140, 140 }, scroll = 273105, train = 140, sq = 2, r = { { 6452, 1 }, { 8544, 2 }, { 4470, 2 } }, out = { 279940, 1 }, oq = 1 },
   },
 }
 

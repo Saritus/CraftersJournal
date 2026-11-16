@@ -59,37 +59,14 @@ ES.TimeAgo = TimeAgo -- (también el estado de los precios al anunciar, Ledger.l
 local main
 local PAGE_MARGIN = 14 -- margen negro de las páginas a los lados y abajo
 
-local function CreateMainFrame()
-  local f = CreateFrame("Frame", "CraftersJournalMainFrame", UIParent, "BackdropTemplate")
-  f:SetSize(840, 612)
-  -- Marco de roca oscura con borde de diálogo del juego
-  f:SetBackdrop({
-    bgFile = "Interface\\FrameGeneral\\UI-Background-Rock",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    tile = true, tileSize = 16, edgeSize = 24,
-    insets = { left = 6, right = 6, top = 6, bottom = 6 },
-  })
-  f:SetBackdropColor(0.045, 0.042, 0.037, 0.99)
-  f:SetPoint("CENTER")
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:SetClampedToScreen(true)
-  f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", f.StartMoving)
-  f:SetScript("OnDragStop", f.StopMovingOrSizing)
-  f:SetFrameStrata("HIGH")
-  f:Hide()
-  tinsert(UISpecialFrames, "CraftersJournalMainFrame") -- cerrar con Escape
-
-  -- Cabecera: Informar, título e idioma (HeaderUI.lua)
-  ES:CreateHeader(f)
-
-  -- Escalar arrastrando la esquina inferior derecha: toda la ventana se amplía o
-  -- reduce a la vez (mismo factor en ancho y alto). La esquina superior izquierda
-  -- se queda donde está. La escala se recuerda.
+-- Escalar arrastrando la esquina inferior derecha: toda la ventana se amplía o
+-- reduce a la vez (mismo factor en ancho y alto). La esquina superior izquierda
+-- se queda donde está. La escala se recuerda en ES.db[dbKey]. Lo usan la ventana
+-- principal (frameScale) y la de opciones (optionsScale, Options.lua)
+function ES.AddScaleGrip(f, dbKey)
   local BASE_W, BASE_H = f:GetWidth(), f:GetHeight()
   local MIN_SCALE, MAX_SCALE = 0.6, 1.8
-  local savedScale = tonumber(ES.db.frameScale)
+  local savedScale = tonumber(ES.db[dbKey])
   if savedScale then f:SetScale(math.min(MAX_SCALE, math.max(MIN_SCALE, savedScale))) end
 
   f.resize = CreateFrame("Button", nil, f)
@@ -122,7 +99,7 @@ local function CreateMainFrame()
   end)
   f.resize:SetScript("OnMouseUp", function(self)
     self:SetScript("OnUpdate", nil)
-    ES.db.frameScale = math.floor(f:GetScale() * 100 + 0.5) / 100
+    ES.db[dbKey] = math.floor(f:GetScale() * 100 + 0.5) / 100
   end)
   f.resize:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -137,8 +114,37 @@ local function CreateMainFrame()
     f:SetScale(1)
     f:ClearAllPoints()
     f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
-    ES.db.frameScale = 1
+    ES.db[dbKey] = 1
   end)
+end
+
+local function CreateMainFrame()
+  local f = CreateFrame("Frame", "CraftersJournalMainFrame", UIParent, "BackdropTemplate")
+  f:SetSize(840, 612)
+  -- Marco de roca oscura con borde de diálogo del juego
+  f:SetBackdrop({
+    bgFile = "Interface\\FrameGeneral\\UI-Background-Rock",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 16, edgeSize = 24,
+    insets = { left = 6, right = 6, top = 6, bottom = 6 },
+  })
+  f:SetBackdropColor(0.045, 0.042, 0.037, 0.99)
+  f:SetPoint("CENTER")
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:SetClampedToScreen(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", f.StartMoving)
+  f:SetScript("OnDragStop", f.StopMovingOrSizing)
+  f:SetFrameStrata("HIGH")
+  f:Hide()
+  tinsert(UISpecialFrames, "CraftersJournalMainFrame") -- cerrar con Escape
+
+  -- Cabecera: Informar, título e idioma (HeaderUI.lua)
+  ES:CreateHeader(f)
+
+  -- Escalar arrastrando la esquina (ES.AddScaleGrip): la escala va en ES.db.frameScale
+  ES.AddScaleGrip(f, "frameScale")
 
   -- Navegación: la portada (tarjetas) y una página por tarjeta. Encima de la
   -- página, el título y "Volver" a la portada

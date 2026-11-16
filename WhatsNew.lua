@@ -21,6 +21,19 @@ local L = ES.L
 -- versión anterior (si te saltaste versiones, todo sale junto: ver ShowWhatsNew)
 ES.WHATS_NEW = {
   {
+    version = "0.58.0",
+    items = {
+      { icon = "Interface\\Icons\\INV_Misc_Gear_01", title = "Opciones en su propia ventana",
+        text = "El engranaje junto al idioma abre las opciones, ordenadas por categorías: General y una por pestaña o ventana. Ya no están en el panel de AddOns del juego." },
+      { icon = "Interface\\Icons\\INV_Misc_Bag_10", title = "Al vendedor, solo lo que no vale más en la AH",
+        text = "Inventario y la ventana del vendedor ya no te proponen vender al vendedor lo que vale más en la AH. Si tu escaneo no tiene un objeto, se usa el precio de Auctionator o TSM." },
+      { icon = "Interface\\Icons\\INV_Misc_Book_09", title = "En el tope de tu rango, a entrenar",
+        text = "Si llegas al tope de tu rango sin el siguiente, el paso actual de la ruta pasa a ser entrenarlo, en vez de fabricar algo que ya no sube puntos." },
+      { icon = "Interface\\Icons\\INV_Misc_Note_01", title = "La ruta explica su segunda receta",
+        text = "Si hay otra receta más barata en oro y la ruta no la usa, el paso dice por qué: más fabricaciones, un paso más o aprenderla no compensa." },
+    },
+  },
+  {
     version = "0.57.0",
     items = {
       { icon = "Interface\\Icons\\INV_Misc_Coin_03", title = "Precios del vendedor, siempre los del juego",

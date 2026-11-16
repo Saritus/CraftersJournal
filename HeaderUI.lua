@@ -1,8 +1,8 @@
 local _, ES = ...
 local L = ES.L
 
--- Cabecera del panel: Informar a la izquierda, título en el centro, selector de
--- idioma a la derecha y botón de cerrar.
+-- Cabecera del panel: Informar a la izquierda, título en el centro, engranaje de
+-- opciones y selector de idioma a la derecha y botón de cerrar.
 
 local GOLD = { 0.96, 0.79, 0.25 }
 
@@ -100,7 +100,7 @@ local function ReportDialog()
   reportDialog = d
   d:SetSize(440, 200)
   d:SetPoint("CENTER", 0, 120)
-  d:SetFrameStrata("DIALOG")
+  d:SetFrameStrata("FULLSCREEN_DIALOG") -- (encima de la ventana de opciones, que va en DIALOG)
   d:EnableMouse(true)
   d:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
@@ -142,9 +142,15 @@ local function ReportDialog()
   ok:SetScript("OnClick", function() d:Hide() end)
 
   d:SetScript("OnShow", function()
-    -- Textos al mostrarse: el idioma puede haber cambiado
-    d.title:SetText(L["Informar de un error"])
-    d.text:SetText(L["¿Has visto información incorrecta, un error o algo nuevo que falte? Cuéntalo en el Discord con una captura de pantalla."])
+    -- Textos al mostrarse: el idioma puede haber cambiado. "join": la invitación al
+    -- Discord de la ventana de opciones; si no, informar de un error
+    if d.kind == "join" then
+      d.title:SetText(L["Únete a nuestro Discord"])
+      d.text:SetText(L["Novedades, ideas y ayuda con el addon. Copia el enlace y ábrelo en tu navegador."])
+    else
+      d.title:SetText(L["Informar de un error"])
+      d.text:SetText(L["¿Has visto información incorrecta, un error o algo nuevo que falte? Cuéntalo en el Discord con una captura de pantalla."])
+    end
     d.label:SetText(L["Discord (Ctrl+C para copiar):"])
     box:SetText(ES.DISCORD_URL)
     box:SetFocus()
@@ -153,8 +159,11 @@ local function ReportDialog()
   return d
 end
 
-function ES:ShowReportDialog()
-  ReportDialog():Show()
+-- `kind`: "join" para la invitación al Discord; sin nada, informar de un error
+function ES:ShowReportDialog(kind)
+  local d = ReportDialog()
+  d.kind = kind
+  if d:IsShown() then d:GetScript("OnShow")() else d:Show() end
 end
 
 local function CreateReport(f)
@@ -180,6 +189,29 @@ local function CreateReport(f)
     GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
     GameTooltip:AddLine(L["Informar de un error"])
     GameTooltip:AddLine(L["Errores, datos incorrectos o sugerencias: en nuestro Discord."], 0.8, 0.8, 0.8, true)
+    GameTooltip:Show()
+  end)
+  b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+---------------------------------------------------------------------------
+-- Opciones: engranaje a la izquierda del idioma; abre o cierra la ventana de
+-- opciones del addon (Options.lua)
+---------------------------------------------------------------------------
+local function CreateOptionsButton(f)
+  local b = CreateFrame("Button", nil, f)
+  f.optionsButton = b
+  b:SetSize(20, 20) -- (el dibujo es de 64 px: reducido se ve nítido)
+  b:SetPoint("RIGHT", f.languageButton, "LEFT", -6, 0)
+  ES.StyleGear(b)
+  b:SetScript("OnClick", function()
+    GameTooltip:Hide()
+    ES:ToggleOptions()
+  end)
+  b:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    GameTooltip:AddLine(L["Opciones"])
+    GameTooltip:AddLine(L["Ventanas, qué se propone vender, avisos y botón del minimapa."], 0.8, 0.8, 0.8, true)
     GameTooltip:Show()
   end)
   b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -260,6 +292,7 @@ function ES:CreateHeader(f)
   end)
 
   CreateLanguage(f)
+  CreateOptionsButton(f)
   CreateReport(f)
 
   local close =CreateFrame("Button", nil, f, "UIPanelCloseButton")

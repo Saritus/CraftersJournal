@@ -774,6 +774,10 @@ SlashCmdList.CRAFTERSJOURNAL = function(msg)
     end
   elseif msg == "opciones" or msg == "options" or msg == "config" then
     ES:OpenOptions()
+  elseif msg == "mini" and ES.Assistant then
+    -- El asistente de la ruta empezada (Assistant.lua). Aún solo en la copia de
+    -- desarrollo: no se publica (#@do-not-package@ en el .toc)
+    ES.Assistant.Toggle()
   elseif msg == "minimap" then
     ES:SetMinimapShown(ES.db.minimap.hide and true or false)
   elseif msg == "errores" or msg == "errors" or msg == "errores borrar" or msg == "errors clear" then

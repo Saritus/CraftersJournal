@@ -525,9 +525,9 @@ function WP.HoverRow(row)
   hover:SetFrameStrata(row:GetFrameStrata())
   hover:SetFrameLevel(row:GetFrameLevel() + 5)
   hover:ClearAllPoints()
-  -- Sin tapar la ✕ de la fila
+  -- Sin tapar la ✕ de la fila (ni los botones de la esquina del asistente: row.hoverInset)
   hover:SetPoint("TOPLEFT", row, "TOPLEFT")
-  hover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", row.onSkip and -28 or 0, 0)
+  hover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -(row.hoverInset or (row.onSkip and 28 or 0)), 0)
   hover:SetAttribute("macrotext", WP.MarkMacro(npc.name))
   hover:Show()
 end

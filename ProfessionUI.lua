@@ -383,6 +383,7 @@ function ES:StartRoute(page)
   plan.lockStarted, plan.lockPrices = lock.started, lock.scanTime
   self.lockedPlans[page.profKey] = plan
   self:RenderPlan(page)
+  if self.Assistant then self.Assistant.Refresh() end -- (sale el asistente de esta ruta)
   -- Empezar la ruta pone su lista en la Lista de compra (se calcula sola): se avisa
   -- como cualquier otra cosa que se añade
   local list = ES.Shopping and ES.Shopping.PhaseList(page.profKey)
@@ -397,6 +398,7 @@ function ES:StopRoute(profKey)
   local settings = self.db.prof and self.db.prof[profKey]
   if settings then settings.lock = nil end
   self.lockedPlans[profKey] = nil
+  if self.Assistant then self.Assistant.Refresh() end
 end
 
 -- Plan de una profesión con su nivel actual y su objetivo, sin necesidad de abrir
@@ -642,6 +644,18 @@ local function AltReason(st, alt)
   return L["encarece otros pasos de la ruta"]
 end
 
+-- Por qué la ruta no usa una alternativa más barata en oro (ver Planner.AlternativeVerdict)
+local function WhyNotText(v, plan, alt)
+  if v == "learnFew" then return string.format(L["aprenderla para %d fabricaciones no compensa"], math.floor((alt.step.crafts or 0) + 0.5)) end
+  if v == "zigzag" then return L["dejaría un salto de pocos puntos entre recetas"] end
+  if v == "crafts" then
+    return string.format(L["%d fabricaciones más"], math.floor((alt.crafts or 0) - ES.Planner.TotalCrafts(plan) + 0.5))
+  end
+  if v == "steps" then return L["un paso más en la ruta"] end
+  if v == "unfollowable" then return L["la ruta no se podría seguir en orden"] end
+  return L["la ruta también cuenta fabricaciones, pasos y lo de tus bolsas"]
+end
+
 -- Calcula, poco a poco, las alternativas de cada paso de la ruta y repinta al acabar
 -- (plan.alts[i] = lista de la más barata a la más cara; vacía si no hay otra receta)
 function ES:ComputeAlternatives(page, plan)
@@ -668,7 +682,14 @@ function ES:ComputeAlternatives(page, plan)
       elseif n >= ALT_BATCH then break end
     end
     if k <= #jobs then C_Timer.After(0, Work) return end
-    for _, list in pairs(results) do table.sort(list, function(a, b) return a.delta < b.delta end) end
+    -- (de mejor a peor con la vara de la ruta, RouteScore: la primera es la que el
+    -- planificador pondría en segundo lugar)
+    for _, list in pairs(results) do
+      table.sort(list, function(a, b)
+        if a.score ~= b.score then return a.score < b.score end
+        return a.delta < b.delta
+      end)
+    end
     plan.alts, plan.altsRunning = results, nil
     if page:IsVisible() and page.plan == plan then ES:RenderPlan(page) end
   end
@@ -684,15 +705,18 @@ local function AltSummary(plan, i, data)
   -- lejos; no quiere decir que sea la única receta que da puntos)
   if not alt then return GREY .. L["ninguna otra sirve sin cambiar el resto de la ruta"] .. "|r" end
   local r = data.recipes[alt.id]
-  if alt.delta <= -0.5 then
-    local extra = math.floor((alt.step.expected or 0) - (plan.steps[i].expected or 0) + 0.5)
-    if extra > 0 then
-      -- La ruta paga un poco más a cambio de fabricar menos veces (a propósito)
-      return GREY .. string.format(L["2ª: %s, %s más barata pero con %d fabricaciones más"], r and r.name or "?",
-        ES.Money(-alt.delta), extra) .. "|r"
+  local v = ES.Planner.AlternativeVerdict(plan, plan.steps[i], alt)
+  if v == "better" then
+    -- Mejor también con la vara de la ruta: el planificador no la encontró; que se vea
+    if alt.delta <= -0.5 then
+      return GREEN .. string.format(L["%s sale %s más barata"], r and r.name or "?", ES.Money(-alt.delta)) .. "|r"
     end
-    -- Más barata y sin más fabricaciones: el planificador no la encontró; que se vea
-    return GREEN .. string.format(L["%s sale %s más barata"], r and r.name or "?", ES.Money(-alt.delta)) .. "|r"
+    return GREEN .. string.format(L["%s sale mejor que la de la ruta"], r and r.name or "?") .. "|r"
+  end
+  if v and alt.delta <= -0.5 then
+    -- Más barata en oro, pero la ruta la descarta a propósito: se dice por qué
+    return GREY .. string.format(L["2ª: %s, %s más barata, pero %s"], r and r.name or "?",
+      ES.Money(-alt.delta), WhyNotText(v, plan, alt)) .. "|r"
   end
   if alt.delta < 0.5 then return GREY .. string.format(L["2ª: %s, igual de cara"], r and r.name or "?") .. "|r" end
   return GREY .. string.format(L["2ª: %s, %s (%s)"], r and r.name or "?", "+" .. ES.Money(alt.delta),
@@ -722,12 +746,15 @@ local function AddAltTooltip(plan, i, data)
     GameTooltip:AddLine("   " .. string.format(L["%d fabricaciones (aquí %d) · %s/u (aquí %s) · recuperas %s/u (aquí %s)"],
       a.crafts, st.crafts, ES.Money(a.unitCost), ES.Money(st.unitCost), ES.Money(a.unitValue), ES.Money(st.unitValue))
       .. ((a.fee or 0) > 0 and (" · " .. L["aprender"] .. " " .. ES.Money(a.fee)) or ""), 0.75, 0.75, 0.75, true)
-    if alt.delta > -0.5 then
-      GameTooltip:AddLine("   " .. L["Peor porque: "] .. AltReason(st, alt), 0.75, 0.75, 0.75, true)
-    elseif (a.expected or 0) > (st.expected or 0) + 0.5 then
-      GameTooltip:AddLine("   " .. L["La ruta prefiere pagar un poco más a cambio de fabricar menos veces."], 0.75, 0.75, 0.75, true)
-    else
+    local v = ES.Planner.AlternativeVerdict(plan, st, alt)
+    if v == "better" then
       GameTooltip:AddLine("   " .. L["Sale mejor que la de la ruta: quita la de la ruta con su |TInterface/Buttons/UI-GroupLoot-Pass-Up:0|t para usar esta."], 0.4, 1, 0.4, true)
+    elseif v == "crafts" then
+      GameTooltip:AddLine("   " .. L["La ruta prefiere pagar un poco más a cambio de fabricar menos veces."], 0.75, 0.75, 0.75, true)
+    elseif v then
+      GameTooltip:AddLine("   " .. string.format(L["Más barata en oro, pero la ruta no la usa: %s."], WhyNotText(v, plan, alt)), 0.75, 0.75, 0.75, true)
+    else
+      GameTooltip:AddLine("   " .. L["Peor porque: "] .. AltReason(st, alt), 0.75, 0.75, 0.75, true)
     end
     if alt.ahGain > alt.delta + 0.5 then
       GameTooltip:AddLine("   " .. string.format(L["Vendiendo lo fabricado en la AH saldría %s mejor que la ruta, si se vende (la ruta cuenta el vendedor, que es lo seguro)."],
@@ -932,6 +959,26 @@ function ES.UI.ItemIconTooltip(row, icon, getItem)
   return hover
 end
 
+-- Clic en una fila (y en el asistente, que hace lo mismo que su fila: ES.UI.RowClick).
+-- Filas de instructor o vendedor: marcar el camino al más cercano. Clic derecho: lo
+-- que diga la línea (line.onRightClick; p. ej. "no venderlo nunca")
+local function RowClick(self, button)
+  if button == "RightButton" then
+    if self.onRightClick then self.onRightClick() end
+    return
+  end
+  -- Mayús+clic en una fila con objeto: como en el resto del juego, su nombre en la
+  -- búsqueda de la AH abierta, o su enlace en el chat (ES:ItemShiftClick)
+  if self.item and IsShiftKeyDown and IsShiftKeyDown() and ES:ItemShiftClick(self.item) then return end
+  if self.onClick then
+    self.onClick()
+  elseif self.ahItem and ES:IsAuctionHouseOpen() then
+    ES:SearchAuction(self.ahItem) -- (receta en la AH, con la AH abierta: buscarla)
+  elseif self.go then
+    ES.Waypoints.Go(self.go)
+  end
+end
+
 local function CreateRow(parent)
   local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
   row:SetWidth(LIST_WIDTH)
@@ -1050,22 +1097,7 @@ local function CreateRow(parent)
   -- Filas de instructor o vendedor: clic para marcar el camino al más cercano.
   -- Clic derecho: lo que diga la línea (line.onRightClick; p. ej. "no venderlo nunca")
   row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-  row:SetScript("OnClick", function(self, button)
-    if button == "RightButton" then
-      if self.onRightClick then self.onRightClick() end
-      return
-    end
-    -- Mayús+clic en una fila con objeto: como en el resto del juego, su nombre en la
-    -- búsqueda de la AH abierta, o su enlace en el chat (ES:ItemShiftClick)
-    if self.item and IsShiftKeyDown and IsShiftKeyDown() and ES:ItemShiftClick(self.item) then return end
-    if self.onClick then
-      self.onClick()
-    elseif self.ahItem and ES:IsAuctionHouseOpen() then
-      ES:SearchAuction(self.ahItem) -- (receta en la AH, con la AH abierta: buscarla)
-    elseif self.go then
-      ES.Waypoints.Go(self.go)
-    end
-  end)
+  row:SetScript("OnClick", RowClick)
   return row
 end
 
@@ -1206,7 +1238,8 @@ local function StyleRow(row, line)
   row.icon:SetSize(line.iconSize or 30, line.iconSize or 30)
   if line.iconSize then row.icon:SetTexCoord(0, 1, 0, 1) elseif line.icon ~= ES.QUEST_ICON then row.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93) end
   row.title:SetText(not isQuote and line.title or "")
-  row.sub:SetText(not isQuote and line.sub or "")
+  -- (con el aviso de la ✕ si la fila la lleva: line.skipNote)
+  row.sub:SetText(not isQuote and ((line.sub or "") .. (line.onSkip and line.skipNote or "")) or "")
   row.value:SetText(line.value or "")
   -- Sin icono, el texto empieza más a la izquierda
   row.title:ClearAllPoints()
@@ -1239,7 +1272,7 @@ local function StyleRow(row, line)
 end
 
 -- Filas de dos líneas compartidas con otras páginas (Ganar dinero, Colección)
-ES.UI.CreateRow, ES.UI.StyleRow, ES.UI.Signed = CreateRow, StyleRow, Signed
+ES.UI.CreateRow, ES.UI.StyleRow, ES.UI.Signed, ES.UI.RowClick = CreateRow, StyleRow, Signed, RowClick
 ES.UI.ROW_HEIGHT, ES.UI.ROW_GAP, ES.UI.SECTION_HEIGHT, ES.UI.LIST_WIDTH = ROW_HEIGHT, ROW_GAP, SECTION_HEIGHT, LIST_WIDTH
 
 -- Ancho de las filas: el de la zona de la lista (llegan hasta el borde, también al
@@ -1547,7 +1580,9 @@ function ES:CreateProfessionPage(page, profKey)
         or L["La ruta más barata, aunque pida más fabricaciones."] }
     end)
 
-  -- Franja de resumen: materiales, profit, instructor y herramientas, total
+  -- Franja de resumen: materiales, ventas al vendedor, instructor y herramientas, total.
+  -- Antes "Profit (vendiendo lo que fabricas)", pero son ingresos, no beneficio (CurseForge:
+  -- "should be called Revenue"); y al vendedor, como el total de la vista Profit
   local strip = CreateFrame("Frame", nil, page)
   strip:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 4, -6)
   strip:SetPoint("TOPRIGHT", head, "BOTTOMRIGHT", -4, -6)
@@ -1556,7 +1591,7 @@ function ES:CreateProfessionPage(page, profKey)
   page.stats = {}
   local STATS = {
     { key = "materials", label = L["Materiales"] },
-    { key = "profit",    label = L["Profit (vendiendo lo que fabricas)"] },
+    { key = "profit",    label = L["Ventas al vendedor"] },
     { key = "fees",      label = L["Instructor y herramientas"] },
     { key = "total",     label = L["Total"] },
   }
@@ -1567,6 +1602,34 @@ function ES:CreateProfessionPage(page, profKey)
     value:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -3)
     page.stats[s.key] = value
   end
+  -- Las ventas, con tooltip: qué cuentan y que lo de la AH está en la vista Profit (que
+  -- aconseja anunciar algunas cosas: que no parezca que se contradicen)
+  local salesHover = CreateFrame("Frame", nil, strip)
+  salesHover:SetPoint("TOPLEFT", strip, "TOPLEFT", 196 + 2, 0)
+  salesHover:SetSize(190, 44)
+  salesHover:EnableMouse(true)
+  salesHover:SetScript("OnEnter", function(self)
+    local plan = page.plan
+    if not (plan and plan.steps and #plan.steps > 0) then return end
+    -- (lo mismo que suma la vista Profit al pie: ProfitLines)
+    local extra = 0
+    for _, d in ipairs(plan.destinations or {}) do
+      if d.sale and d.sale.ahNet and d.sell > 0 and d.ahExtra then extra = extra + d.ahExtra end
+    end
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    GameTooltip:AddLine(L["Ventas al vendedor"], 1, 0.82, 0)
+    GameTooltip:AddLine(L["Lo que sacas vendiendo al vendedor todo lo que fabricas y no guardas para pasos siguientes. La ruta cuenta este precio porque es una venta segura."], 0.8, 0.8, 0.8, true)
+    GameTooltip:AddLine(" ")
+    if extra > 0 then
+      GameTooltip:AddLine(string.format(L["En la vista %s verás qué conviene poner en la AH: hasta %s más, sin garantía de venta."],
+        L["Profit"], ES.Money(extra)), 1, 0.82, 0, true)
+    else
+      GameTooltip:AddLine(string.format(L["En la vista %s verás qué hacer con cada cosa que fabricas."], L["Profit"]), 0.8, 0.8, 0.8, true)
+    end
+    GameTooltip:Show()
+  end)
+  salesHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  page.salesHover = salesHover
   page.routeButton:SetPoint("TOPRIGHT", strip, "BOTTOMRIGHT", 0, 0)
   page.status = Label(page, "", "GameFontHighlightSmall")
   page.status:SetPoint("TOPLEFT", strip, "BOTTOMLEFT", 2, -4)
@@ -1683,6 +1746,7 @@ end
 -- lo de las bolsas" la ruta no cambia y basta con repintar (la lista de la compra
 -- cuenta lo que llevas); sin fijar y con bolsas, se recalcula
 function ES:RefreshAfterBags()
+  if self.Assistant then self.Assistant.Refresh() end -- (el paso actual puede cambiar)
   for _, page in ipairs(self.professionPages or {}) do
     if page.initialized and page:IsVisible() and page.data then
       local settings = self.db.prof and self.db.prof[page.profKey] or {}
@@ -1694,6 +1758,7 @@ end
 -- Aprendes una receta: con la ruta fijada se repinta (su fila de aprender queda
 -- hecha); sin fijar, se recalcula (ya no hay que pagarla)
 function ES:RefreshAfterLearn()
+  if self.Assistant then self.Assistant.Refresh() end
   for _, page in ipairs(self.professionPages or {}) do
     if page.initialized and page:IsVisible() and page.data then
       if self:RouteLock(page.profKey) then self:RenderPlan(page) else self:CalculatePlan(page) end
@@ -1711,6 +1776,7 @@ end
 -- empezada solo se repinta (paso actual, lo que falta, pasos hechos); sin empezar,
 -- la ruta se recalcula desde el nivel nuevo
 function ES:RefreshAfterSkill()
+  if self.Assistant then self.Assistant.Refresh() end
   -- Avisos de compra por tramos de las rutas empezadas (aunque el addon esté cerrado).
   -- Protegidos: si uno falla, la página se refresca igual (si no, se quedaba con el
   -- nivel de antes: "17/18 puntos" estando ya más arriba y fabricando de 2 en 2)
@@ -1986,7 +2052,7 @@ local function SourcedLearnLine(r, st, profName, plan)
   -- La ✕ de la fila, a la vista donde más falta (antes solo en su tooltip y casi nadie
   -- sabía que podía saltarse una receta): vendedor de stock limitado y AH
   local skipHint = GREY .. L[" · X para quitarla"] .. "|r"
-  local icon, sub, pick, label
+  local icon, sub, pick, label, hint
   local useItem
   if best.kind == "owned" then
     icon, title = RECIPE_ICON, L["Aprender receta: "] .. r.name
@@ -2000,17 +2066,19 @@ local function SourcedLearnLine(r, st, profName, plan)
     local q = best.quest
     local cost = (q.asks and L[" · pide objetos"] or "")
       .. ((q.chain or 0) > 0 and string.format(L[" · cadena de %d misiones"], q.chain + 1) or "")
-    sub = L["Misión: "] .. q.name .. (cost ~= "" and (ORANGE .. cost .. "|r" .. skipHint) or also)
+    sub = L["Misión: "] .. q.name .. (cost ~= "" and (ORANGE .. cost .. "|r") or also)
+    hint = cost ~= ""
     pick = function() return WP.Nearest(best.quest.starters) end
   elseif best.kind == "vendor" then
     icon, label = RECIPE_ICON, L["Vendedor más cercano"]
     sub = L["Vendedor de recetas"] .. (limited and (ORANGE .. L[" · stock limitado"] .. "|r") or "") .. also
-      .. (limited and skipHint or "")
+    hint = limited
     pick = function() return WP.Nearest(src.vendors) end
   else
     -- En la AH: clic al subastador más cercano; con la AH abierta, la busca
     icon, label = AH_ICON, L["Subastador más cercano"]
-    sub = string.format(L["Casa de Subastas · la más barata ahora (%d a la venta)"], src.ah.listings) .. skipHint
+    sub = string.format(L["Casa de Subastas · la más barata ahora (%d a la venta)"], src.ah.listings)
+    hint = true
     pick = WP.Target("auction")
   end
 
@@ -2094,7 +2162,9 @@ local function SourcedLearnLine(r, st, profName, plan)
   end
 
   return { icon = icon, title = title, sub = sub, value = CostOrFree(st.fee), go = pick, tooltip = Tooltip,
-    ahItem = best.kind == "ah" and r.scroll or nil, useItem = useItem }
+    ahItem = best.kind == "ah" and r.scroll or nil, useItem = useItem,
+    -- (el aviso de la ✕ va aparte: solo se ve donde está la ✕, no en el asistente)
+    skipNote = hint and skipHint or nil }
 end
 
 -- Cita "Con lo que llevas": por qué la ruta no usa una receta que podrías hacer
@@ -2140,7 +2210,241 @@ local function BagsLine(alt, locked)
   }
 end
 
-local function RouteLines(plan, page)
+-- Lo que falta comprar de la ruta desde `level`: la MISMA regla que la Lista de compra y
+-- la vista Materiales (Planner.RouteNeed: con la ruta empezada, por tramos y con su
+-- colchón) frente a lo que llevas (bolsas y lo comprado en la AH que está en el correo).
+-- { ah = { it }, vendor = { it }, have = { { itemID, quantity } }, left (lo que cuesta lo
+-- que falta), need = { [itemID] = unidades }, phase, Have = función }
+-- it = { itemID, quantity (lo que falta), need, source, unit, total, supply }
+-- opts.phase: siempre por tramos (las filas de compra), aunque la lista sea de la ruta entera
+local function RouteBuy(plan, profKey, level, opts)
+  local routeNeed, phase = ES.Planner.RouteNeed(profKey, plan, level, opts)
+  local function Have(itemID) return ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID) end
+  local shopping = {}
+  for _, it in ipairs(plan.shopping or {}) do shopping[it.itemID] = it end
+  local res = { ah = {}, vendor = {}, have = {}, left = 0, need = {}, phase = phase, Have = Have }
+  local ids = {}
+  for itemID, n in pairs(routeNeed) do
+    res.need[itemID] = n.need
+    ids[#ids + 1] = itemID
+  end
+  table.sort(ids)
+  for _, itemID in ipairs(ids) do
+    local n = math.ceil(res.need[itemID] - 0.001)
+    if n > 0 then
+      local missing = n - Have(itemID)
+      if missing > 0 then
+        local planned = shopping[itemID]
+        local vendorPrice = ES.Data.VendorPrices and ES.Data.VendorPrices[itemID]
+        local source = planned and planned.source or (vendorPrice and "vendor" or "ah")
+        local ahEntry = plan.ctx and plan.ctx.prices and plan.ctx.prices[itemID]
+        local unit = planned and planned.unit or vendorPrice or (ahEntry and ahEntry.minUnit) or 0
+        local it = { itemID = itemID, quantity = missing, need = n, source = source, unit = unit, total = unit * missing,
+          supply = planned and planned.supply or (ahEntry and ahEntry.quantity) }
+        res.left = res.left + it.total
+        table.insert(source == "ah" and res.ah or res.vendor, it)
+      else
+        res.have[#res.have + 1] = { itemID = itemID, quantity = n }
+      end
+    end
+  end
+  return res
+end
+
+---------------------------------------------------------------------------
+-- Filas de compra de la ruta empezada, SOLO para el asistente (docs/ASISTENTE.md,
+-- sección 3; ES:RouteLines con opts.buy): la ventana tiene Materiales y la Lista de
+-- compra, y el asistente un solo paso a la vista. "Compra en la AH" y "Compra al
+-- vendedor", con lo que falta del tramo (RouteBuy, lo mismo que Materiales). Van delante del paso
+-- en el que estás y son el paso actual cuando toca comprar:
+--   · al empezar el tramo (aún sin puntos en él), si falta algo;
+--   · cuando no puedes fabricar ni una vez el paso actual (mala suerte, tanda gastada).
+-- Si aún puedes fabricar, no paran la ruta: el paso actual avisa ("luego compra...").
+-- Si ya fuiste a la AH o al vendedor y no lo compraste todo (no había, no quisiste),
+-- dejan de parar mientras puedas fabricar algo (ES.routeBuyVisits)
+---------------------------------------------------------------------------
+ES.routeBuyVisits = {} -- [profKey] = { key = tramo, ah = true, vendor = true } (esta sesión)
+local VENDOR_ICON = "Interface\\Icons\\INV_Misc_Bag_10"
+local BY_PHASE = { phase = true } -- las filas de compra van siempre por tramos (tandas)
+
+local function PhaseKey(phase) return phase and (phase.steps[1].from .. ":" .. phase.to) or "route" end
+
+-- "Runecloth 12/40 · Thread 2/10 · +1"
+local function BuyList(items, have)
+  local parts = {}
+  for i, it in ipairs(items) do
+    if i > 2 then parts[#parts + 1] = "+" .. (#items - 2) break end
+    parts[#parts + 1] = string.format("%s %d/%d", ES:DataItemName(it.itemID) or (ItemLabel(it.itemID, L["Objeto "] .. it.itemID)),
+      have(it.itemID), it.need)
+  end
+  return table.concat(parts, " · ")
+end
+
+local function BuyLine(source, items, buy, level, visited, profKey)
+  local single = #items == 1 and items[1]
+  local name, texture = single and ItemLabel(single.itemID, L["Objeto "] .. single.itemID)
+  local cost = 0
+  for _, it in ipairs(items) do cost = cost + it.total end
+  local title
+  if single then
+    title = string.format(L["Compra %d× %s"], single.quantity, name)
+  else
+    title = string.format(source == "ah" and L["Compra en la AH: %d materiales"] or L["Compra al vendedor: %d materiales"], #items)
+  end
+  local list = BuyList(items, buy.Have)
+  local where = source == "ah" and L["en la AH"] or L["en el vendedor"]
+  local sub = (single and string.format("%d/%d · %s", buy.Have(single.itemID), single.need, where) or list)
+  if visited then sub = ORANGE .. L["No había suficiente"] .. "|r · " .. sub end
+  -- Clic: con la AH abierta, la compra del primero que falta (cada clic, el siguiente);
+  -- con el vendedor abierto, compra lo que vende de la lista; si no, el camino
+  local onClick, go, action
+  if source == "ah" and ES:IsAuctionHouseOpen() then
+    local it = items[1]
+    action = string.format(L["abrir la compra de %d en la AH"], it.quantity)
+    onClick = function() ES:OpenAuctionBuy(it.itemID, it.quantity, it.unit) end
+  elseif source == "vendor" and ES.Ledger and ES.Ledger:MerchantOpen() and ES.VendorShop then
+    local entries, want = {}, {}
+    for _, it in ipairs(items) do want[it.itemID] = true end
+    for _, e in ipairs(ES.VendorShop:List()) do if want[e.itemID] then entries[#entries + 1] = e end end
+    if entries[1] then
+      action = L["comprar a este vendedor lo que vende de la lista"]
+      onClick = function() for _, e in ipairs(entries) do ES.VendorShop:Buy(e) end end
+    end
+  end
+  if not onClick then go = WP.Target(source == "ah" and "auction" or "vendor", items[1].itemID) end
+  local label = source == "ah" and L["Subastador más cercano"] or L["Vendedor más cercano"]
+  -- Quitaste la lista de esta ruta de la Lista de compra: el clic (lejos de la AH y del
+  -- vendedor) la vuelve a añadir, con el mismo aviso que al empezar la ruta, y marca el camino
+  local readd = not onClick and ES.Shopping and ES.Shopping.RouteListHidden(profKey)
+  local bannerSub = visited and (ORANGE .. L["No había suficiente"] .. "|r") or ""
+  if readd then
+    local pick = go
+    onClick = function()
+      ES.Shopping.SetRouteListHidden(profKey, false)
+      local list = ES.Shopping.PhaseList(profKey)
+      if list then ES:Print(string.format(L["Añadido a la lista de compra: %s."], list.title)) end
+      if ES.FlashTab then ES:FlashTab("shopping", true) end
+      if ES.RenderShopping then ES:RenderShopping() end
+      WP.Go(pick)
+    end
+    action = L["volver a añadirla a la Lista de compra y marcar el camino"]
+    bannerSub = (bannerSub ~= "" and (bannerSub .. " · ") or "") .. ORANGE .. L["No está en tu Lista de compra · clic para añadirla"] .. "|r"
+  end
+  return {
+    level = tostring(level), buyRow = source, buyItems = items, readd = readd or nil, -- (para pruebas)
+    icon = texture or (source == "ah" and AH_ICON or VENDOR_ICON),
+    title = title, sub = sub .. (single and "" or (" · ~" .. ES.Money(cost))),
+    -- En el asistente, sin subtítulo (el título lo dice; la lista, en el tooltip). Solo
+    -- los avisos: no había suficiente, o no está en tu Lista de compra
+    bannerSub = bannerSub,
+    value = Signed(cost), item = single and single.itemID or nil,
+    onClick = onClick, go = not readd and go or nil,
+    tooltip = function(row)
+      GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+      GameTooltip:AddLine(source == "ah" and L["Comprar en la Casa de Subastas"] or L["Comprar al vendedor"])
+      GameTooltip:AddLine(buy.phase and L["Lo que te falta para este tramo, con lo que llevas ahora"]
+        or L["Lo que te falta para lo que queda de ruta, con lo que llevas ahora"], 0.8, 0.8, 0.8, true)
+      GameTooltip:AddLine(" ")
+      for _, it in ipairs(items) do
+        GameTooltip:AddDoubleLine((ItemLabel(it.itemID, L["Objeto "] .. it.itemID)),
+          string.format("%d/%d · %s", buy.Have(it.itemID), it.need, ES.Money(it.total)), 1, 1, 1, 1, 1, 1)
+      end
+      if visited then
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(L["Ya fuiste y no lo compraste todo: mientras puedas fabricar, la ruta sigue. Si no hay de dónde sacarlo, quita la receta con su X en la ruta."], 1, 0.6, 0.2, true)
+      end
+      if action then
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(L["Clic: "] .. action .. ".", 0.5, 0.8, 1, true)
+      else
+        WP.AddToTooltip(label, go)
+      end
+      GameTooltip:Show()
+    end,
+  }
+end
+
+-- Añade las filas de compra a las de la ruta empezada (ver arriba) y decide si son el
+-- paso actual. `level`: tu nivel
+local function AddBuyLines(lines, plan, page, level)
+  local buy = RouteBuy(plan, page.profKey, level, BY_PHASE) -- (tanda a tanda, aunque la lista sea de la ruta entera)
+  if not (buy.ah[1] or buy.vendor[1]) then return end
+  local at -- la fila del paso en el que estás (delante de ella van las de compra)
+  for i, line in ipairs(lines) do if line.current then at = i break end end
+  if not at then
+    for i, line in ipairs(lines) do if line.level and not line.done then at = i break end end
+  end
+  if not at then return end
+  local cur = lines[at]
+  local key = PhaseKey(buy.phase)
+  local visits = ES.routeBuyVisits[page.profKey]
+  if visits and visits.key ~= key then visits = nil ES.routeBuyVisits[page.profKey] = nil end
+  -- ¿Puedes fabricar el paso actual al menos una vez? (aprender o entrenar: no)
+  local canCraft = false
+  if cur.current and cur.stepRecipe and ES:IsRecipeKnown(cur.stepRecipe) then
+    local n = ES.CraftableFromBags(cur.stepRecipe)
+    canCraft = n == nil or n >= 1
+  end
+  local atStart = not buy.phase or level <= buy.phase.steps[1].from
+  local new, blocking = {}, false
+  for _, source in ipairs({ "ah", "vendor" }) do
+    local items = buy[source]
+    if items[1] then
+      local visited = visits and visits[source]
+      local line = BuyLine(source, items, buy, level, visited, page.profKey)
+      -- Para: no puedes fabricar, o empieza el tramo y aún no has ido a comprar
+      if cur.current and not blocking and (not canCraft or (atStart and not visited)) then
+        line.current, blocking = true, true
+      end
+      new[#new + 1] = line
+    end
+  end
+  if blocking then
+    cur.current = false
+  elseif cur.current and cur.bannerSub then
+    -- Puedes seguir fabricando: el paso lo dice ("luego compra ~8 Runecloth más")
+    local first = buy.ah[1] or buy.vendor[1]
+    local more = #buy.ah + #buy.vendor - 1
+    local text = string.format(L["luego compra %d %s%s"], first.quantity, ES:DataItemName(first.itemID) or first.itemID,
+      more > 0 and string.format(L[" y %d más"], more) or "")
+    cur.sub = (cur.sub or "") .. ORANGE .. " · " .. text .. "|r"
+    cur.bannerSub = cur.bannerSub .. ORANGE .. " · " .. text .. "|r"
+  end
+  for i = #new, 1, -1 do table.insert(lines, at, new[i]) end
+end
+ES.RouteBuy = RouteBuy -- (para pruebas)
+
+-- Al cerrar la AH o el vendedor con compras de la ruta pendientes: ya fuiste. Esas filas
+-- dejan de parar la ruta mientras puedas fabricar (si no había, no te quedas atascado)
+do
+  local f = CreateFrame("Frame")
+  ES.SafeRegister(f, "AUCTION_HOUSE_CLOSED")
+  ES.SafeRegister(f, "MERCHANT_CLOSED")
+  f:SetScript("OnEvent", function(_, event)
+    -- (solo sirve al asistente: sin él, no hay filas de compra)
+    if not (ES.Assistant and ES.db and ES.db.prof) then return end
+    local source = event == "AUCTION_HOUSE_CLOSED" and "ah" or "vendor"
+    for _, p in ipairs(ES.PROFESSIONS or {}) do
+      local data = ES.Data[p.key]
+      local lock = data and ES:RouteLock(p.key)
+      local plan = lock and not lock.completed and ES:LockedPlan(p.key)
+      if plan then
+        local level = ES:GetProfessionSkill(data.skillLine) or plan.from
+        local buy = RouteBuy(plan, p.key, level, BY_PHASE)
+        if buy[source][1] then
+          local key = PhaseKey(buy.phase)
+          local v = ES.routeBuyVisits[p.key]
+          if not v or v.key ~= key then v = { key = key } ES.routeBuyVisits[p.key] = v end
+          v[source] = true
+        end
+      end
+    end
+    if ES.RefreshAfterBags then ES:RefreshAfterBags() end
+  end)
+end
+
+-- opts.buy: con las filas de compra (solo el asistente; ver AddBuyLines)
+local function RouteLines(plan, page, opts)
   local lines = {}
   local profIcon, profName = page.profIcon or ES.ICON, page.profName
   local settings = ES.db.prof[page.profKey]
@@ -2224,6 +2528,8 @@ local function RouteLines(plan, page)
   table.sort(events, function(a, b) return a.skill < b.skill end)
 
   local ev = 1
+  -- Rango sin aprender y ya en el tope del tuyo: es lo que toca (sin él no sube nada más)
+  local rankPending = false
   local function AddEvent(e)
     if e.rank then
       local rk = e.rank
@@ -2254,6 +2560,9 @@ local function RouteLines(plan, page)
         line.sub = GREY .. L["Hecho"] .. "|r"
         line.value = line.value and (GREY .. Plain(line.value) .. "|r") or nil
         line.done, line.go, pick = true, nil, nil
+      elseif locked and cap and (page.from or 0) >= cap and (page.from or 0) >= rk.skill then
+        -- Ruta empezada y en el tope de tu rango: el paso en el que estás es entrenarlo
+        line.current, rankPending = true, true
       end
       if pick then
         line.tooltip = TravelTooltip(string.format(L["Entrenar %s (%s)"], rankName, profName),
@@ -2306,9 +2615,9 @@ local function RouteLines(plan, page)
       local later = c.from and c.from > st.from and not conversion and c.from or nil
       local current
       if later then
-        current = locked and (page.from or 0) >= later and (page.from or 0) < st.to and missing > 0
+        current = locked and not rankPending and (page.from or 0) >= later and (page.from or 0) < st.to and missing > 0
       else
-        current = inStep and not prepPending and missing > 0
+        current = inStep and not rankPending and not prepPending and missing > 0
         if current then prepPending = true end
       end
       -- Obligatorio: no se puede comprar hecho (se liga al recogerlo, o no está en la
@@ -2344,6 +2653,7 @@ local function RouteLines(plan, page)
         title = title,
         sub = sub,
         item = c.itemID, current = current,
+        stepRecipe = not conversion and recipeID or nil,
         craftCount = craftNow and crafts or nil, -- (para pruebas)
         onClick = not conversion and recipeID and function()
           if craftNow then ES:CraftRecipe(recipeID, crafts) else ES:OpenRecipe(recipeID) end
@@ -2441,7 +2751,7 @@ local function RouteLines(plan, page)
       elseif inStep then
         -- Aún no la sabes y ya toca: el paso actual es aprenderla, no fabricarla
         -- (salvo que antes falte fabricar algún material: entonces es ese)
-        line.current, learnPending = not prepPending, true
+        line.current, learnPending = not prepPending and not rankPending, true
       end
     end
     local perPoint = st.expected / (st.to - st.from)
@@ -2465,7 +2775,7 @@ local function RouteLines(plan, page)
       aheadText = aheadText .. string.format(L[" · +%d para %s"], a.quantity, a.recipe and a.recipe.name or "?")
     end
     -- El paso en el que estás (si antes hay que aprender la receta, es esa fila)
-    local current = inStep and not learnPending and not prepPending
+    local current = inStep and not learnPending and not prepPending and not rankPending
     -- Lo que se tarda en fabricar este paso (lo que falta, si vas por él)
     local craftSecs = ES.Planner.CraftSeconds(st.id)
     local stepCrafts = current and left or (st.crafts + (st.aheadCrafts or 0))
@@ -2500,11 +2810,16 @@ local function RouteLines(plan, page)
         if now ~= page.from then ES:RefreshAfterSkill() end
       end,
       craftCount = craftNow and left or nil, -- (para pruebas)
+      stepRecipe = st.id, -- (filas de compra: ¿puedes fabricarla ya?)
       level = st.from .. "–" .. st.to, -- columna de nivel: el tramo
       done = done, current = current,
       icon = texture or 134400,
       -- Hecho: icono de "listo" (la fuente no tiene ✓) y el nombre en gris (sin el color de calidad)
       title = done and (ES.Market.ICON_OK .. GREY .. name:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r") or name,
+      -- En el asistente, con el verbo: "Fabrica ~12× Bolt of Runecloth" (lo que te queda)
+      bannerTitle = not done and string.format("%s %d× %s", L["Fabrica"], stepCrafts, name) or nil,
+      -- y debajo solo cuántas y cuánto se tarda (sin precios: eso está en la ventana)
+      bannerSub = not done and string.format(L["%d fabricaciones · %s"], stepCrafts, Duration(stepSecs)) or nil,
       sub = done and (GREY .. L["Hecho"] .. "|r")
         -- Lo que llevas se mide en puntos (tu nivel), no en fabricaciones de esta
         -- receta: los puntos que te dé otra (Bolt of Woolen Cloth) también cuentan
@@ -2534,6 +2849,11 @@ local function RouteLines(plan, page)
     end
   end
   while events[ev] do AddEvent(events[ev]) ev = ev + 1 end
+  -- Para el asistente, con la ruta empezada y sin acabar: lo que falta comprar, delante
+  -- del paso en el que estás (la ventana lo tiene en Materiales y la Lista de compra)
+  if opts and opts.buy and locked and (page.from or 0) < settings.lock.to then
+    AddBuyLines(lines, plan, page, page.from or plan.from)
+  end
   if plan.stoppedAt then
     lines[#lines + 1] = { title = ORANGE .. L["El plan se queda en "] .. plan.stoppedAt .. "|r", sub = StopReason(plan) }
   end
@@ -2599,6 +2919,25 @@ local function RouteLines(plan, page)
     sub = string.format(L["Subir de %d a %d"], plan.from, plan.reached)
       .. (routeSecs > 0 and (" · " .. string.format(L["%s fabricando"], Duration(routeSecs))) or "") }
   return lines
+end
+
+-- La vista Ruta de la ruta empezada de una profesión, sin su ventana abierta (el
+-- asistente, Assistant.lua): las MISMAS filas, con tu nivel de ahora. Así el asistente
+-- nunca decide nada por su cuenta. Devuelve las filas y la ruta, o nil sin ruta empezada.
+-- (La ✕ y "Recetas quitadas" recalculan en la ventana: el asistente no las usa)
+-- opts.buy: añade las filas de compra (AddBuyLines), que solo tiene el asistente: la
+-- ventana tiene Materiales y la Lista de compra; el asistente, un solo paso a la vista
+function ES:RouteLines(profKey, opts)
+  local data = ES.Data[profKey]
+  local plan = data and self:RouteLock(profKey) and self:LockedPlan(profKey)
+  if not (plan and #plan.steps > 0) then return nil end
+  local rank, maxRank = self:GetProfessionSkill(data.skillLine)
+  local prof
+  for _, p in ipairs(ES.PROFESSIONS or {}) do if p.key == profKey then prof = p end end
+  local view = { profKey = profKey, data = data, profName = self:ProfLabel(profKey),
+    profIcon = prof and prof.icon or ES.ICON, from = rank or 1,
+    detected = rank and { rank = rank, cap = maxRank } or nil }
+  return RouteLines(plan, view, opts), plan
 end
 
 -- Clic de una fila de la vista Profit: con el vendedor abierto vende lo que toca
@@ -2710,12 +3049,11 @@ local function ShopLines(plan, page)
   end
   -- Cuánto hace falta: la misma regla que la Lista de compra y la ventana del
   -- vendedor (Planner.RouteNeed: por tramos solo con la ruta empezada)
-  local routeNeed, phase = ES.Planner.RouteNeed(page.profKey, plan, page.from)
-  local need = {}
-  for itemID, n in pairs(routeNeed) do need[itemID] = n.need end
   -- Lo que tienes: las bolsas y lo comprado en la AH que aún está en el correo (ni el
-  -- banco ni el resto del correo; ver Ledger:OnTheWay)
-  local function Have(itemID) return ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID) end
+  -- banco ni el resto del correo; ver Ledger:OnTheWay). Lo mismo que las filas de
+  -- compra de la vista Ruta (RouteBuy)
+  local buy = RouteBuy(plan, page.profKey, page.from)
+  local need, phase, Have = buy.need, buy.phase, buy.Have
   local function Progress(itemID)
     local have = Have(itemID)
     local n = math.ceil((need[itemID] or 0) - 0.001)
@@ -2772,31 +3110,7 @@ local function ShopLines(plan, page)
     -- Por tramos (por defecto): solo lo del tramo en el que estás, con su margen
     -- (ya en `need`, de Planner.RouteNeed); la Lista de compra lo enseña sola
     local byPhase = ES.Shopping.ByPhase(page.profKey)
-    local shopping = {}
-    for _, it in ipairs(plan.shopping) do shopping[it.itemID] = it end
-    local buyAH, buyVendor, haveAll, left = {}, {}, {}, 0
-    local ids = {}
-    for itemID in pairs(need) do ids[#ids + 1] = itemID end
-    table.sort(ids)
-    for _, itemID in ipairs(ids) do
-      local n = math.ceil(need[itemID] - 0.001)
-      if n > 0 then
-        local missing = n - Have(itemID)
-        if missing > 0 then
-          local planned = shopping[itemID]
-          local vendorPrice = ES.Data.VendorPrices and ES.Data.VendorPrices[itemID]
-          local source = planned and planned.source or (vendorPrice and "vendor" or "ah")
-          local ahEntry = plan.ctx and plan.ctx.prices[itemID]
-          local unit = planned and planned.unit or vendorPrice or (ahEntry and ahEntry.minUnit) or 0
-          local it = { itemID = itemID, quantity = missing, source = source, unit = unit, total = unit * missing,
-            supply = planned and planned.supply or (ahEntry and ahEntry.quantity) }
-          left = left + it.total
-          if source == "ah" then buyAH[#buyAH + 1] = it else buyVendor[#buyVendor + 1] = it end
-        else
-          haveAll[#haveAll + 1] = { itemID = itemID, quantity = n }
-        end
-      end
-    end
+    local buyAH, buyVendor, haveAll, left = buy.ah, buy.vendor, buy.have, buy.left
     Section(L["Comprar en la Casa de Subastas"], buyAH, Buy)
     Section(L["Comprar al vendedor"], buyVendor, Buy)
     Section(L["Ya lo tienes"], haveAll, function(it)

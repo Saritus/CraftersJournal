@@ -322,12 +322,15 @@ end
 --     el que estás con su colchón (PhaseNeed); si no, lo que queda de ruta, sin colchón
 --   opts.keep: lo que queda de ruta entera, siempre (Inventario: lo que guardas no
 --     es solo el tramo; si no, te diría que vendas lo del tramo siguiente)
+--   opts.phase: por tramos aunque la Lista de compra sea de la ruta entera (las filas de
+--     compra de la vista Ruta y el asistente: te guían tanda a tanda)
 -- Devuelve { [itemID] = { need (unidades enteras), expected } } y el tramo (o nil)
 function Planner.RouteNeed(profKey, plan, level, opts)
   local out = {}
   if not plan then return out, nil end
   level = math.max(plan.from or level or 1, level or plan.from or 1)
-  local byPhase = not (opts and opts.keep) and ES:RouteLock(profKey) and ES.Shopping and ES.Shopping.ByPhase(profKey)
+  local byPhase = not (opts and opts.keep) and ES:RouteLock(profKey)
+    and ((opts and opts.phase) or (ES.Shopping and ES.Shopping.ByPhase(profKey)))
   if byPhase then
     local need, phase = Planner.PhaseNeed(plan, level)
     for itemID, n in pairs(need) do
@@ -2763,9 +2766,21 @@ function Planner.AlternativeCandidates(data, plan, st)
   return out
 end
 
+-- Pasos A-B-A con B corto (los que la ruta quita a propósito, ver PlanGPS)
+local function Zigzags(plan)
+  local n, steps = 0, plan.steps or {}
+  for i = 2, #steps - 1 do
+    local a, b, c = steps[i - 1], steps[i], steps[i + 1]
+    if a.id == c.id and b.to - b.from <= ZIGZAG_STEPS then n = n + 1 end
+  end
+  return n
+end
+
 -- La ruta con `id` en el tramo de `st`. Devuelve { id, delta (coste neto de más de toda
--- la ruta), step (su paso en ese tramo), ahGain (lo que ganaría vendiendo lo fabricado
--- en la AH en vez de al vendedor) }, o nil si así no se llega igual de lejos
+-- la ruta), score (lo mismo con la vara del planificador, Planner.RouteScore: también
+-- fabricaciones, pasos...), step (su paso en ese tramo), ahGain (lo que ganaría
+-- vendiendo lo fabricado en la AH en vez de al vendedor), crafts, steps, zigzags,
+-- unfollowable (de la ruta con ella) }, o nil si así no se llega igual de lejos
 function Planner.EvaluateAlternative(data, plan, st, id)
   local o = Copy(plan.ctx.opts)
   o.forced = {}
@@ -2782,7 +2797,39 @@ function Planner.EvaluateAlternative(data, plan, st, id)
   if sale and sale.ahNet and sale.vendor and sale.ahNet > sale.vendor then
     ahGain = step.crafts * (sale.qty or 1) * (sale.ahNet - sale.vendor)
   end
-  return { id = id, delta = p.net - plan.net, step = step, ahGain = ahGain }
+  return { id = id, delta = p.net - plan.net, score = Planner.RouteScore(p) - Planner.RouteScore(plan),
+    step = step, ahGain = ahGain, crafts = Planner.TotalCrafts(p), steps = #p.steps,
+    zigzags = Zigzags(p), unfollowable = p.unfollowable }
+end
+
+-- Si `alt` es de verdad mejor que la ruta, con la misma vara con la que el
+-- planificador elige (antes la fila decía "sale X más barata" mirando solo el oro,
+-- y la ruta podía haberla descartado a propósito). Devuelve:
+--   "better":       mejor también para el planificador (no la encontró)
+--   "learnFew":     aprenderla para pocas fabricaciones no compensa (LEARN_WORTH)
+--   "zigzag":       deja un salto A-B-A, que la ruta quita si cuesta poco (ZIGZAG_*)
+--   "crafts", "steps", "unfollowable", "weights": más barata en oro pero peor con la
+--                   vara de la ruta, y el motivo principal
+--   nil:            no es más barata ni en oro
+function Planner.AlternativeVerdict(plan, st, alt)
+  if alt.delta > -0.5 and (alt.score or alt.delta) > -0.5 then return nil end
+  local score = alt.score or alt.delta
+  if score <= -0.5 then
+    -- Mejor con la vara de la ruta, salvo las reglas que la ruta aplica a propósito al final
+    local a = alt.step
+    local learns = a.learnSource ~= nil and a.learnSource ~= "known"
+    if learns and (a.crafts or 0) <= LEARN_FEW_CRAFTS and -score <= LEARN_WORTH then return "learnFew" end
+    if (alt.zigzags or 0) > Zigzags(plan) then
+      local allowed = math.max(ZIGZAG_MIN, ZIGZAG_PCT * math.abs(Planner.RouteScore(plan)))
+      if -score <= allowed then return "zigzag" end
+    end
+    return "better"
+  end
+  -- Más barata en oro, pero no para la ruta: por qué
+  if alt.unfollowable and not plan.unfollowable then return "unfollowable" end
+  if (alt.crafts or 0) > Planner.TotalCrafts(plan) + 0.5 then return "crafts" end
+  if (alt.steps or 0) > #(plan.steps or {}) then return "steps" end
+  return "weights"
 end
 
 -- Motivo principal por el que `alt` sale peor que el paso `st` de la ruta:

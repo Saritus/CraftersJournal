@@ -6,7 +6,9 @@ local L = ES.L
 -- VendorUI.lua) con lo que la pestaña Inventario dice que vendas en la AH: cuántos,
 -- a cuánto y lo que te queda tras la comisión. Clic en una fila: anuncia todas las
 -- de la fila; Mayús+clic, solo una (un anuncio por clic: la AH pide un clic del
--- jugador para cada uno). Clic derecho: no venderlo nunca. Va pegada a la AH, y la
+-- jugador para cada uno). Ctrl+clic, si las alertas del mercado dejaron solo unas pocas
+-- (Inventory: AH_FEW), todas las que podrías vender, avisando del riesgo (Discord:
+-- "¿por qué me ofrece 5 Turtle Meat si tengo muchas?"). Clic derecho: no venderlo nunca. Va pegada a la AH, y la
 -- lista de compra pequeña, si sale, a su derecha. Con la ventana grande al lado de la AH no sale (ya tienes el
 -- Inventario ahí).
 
@@ -73,6 +75,11 @@ local function ConfirmDialog()
   d.check:SetPoint("TOPLEFT", 24, -78)
   d.checkLabel = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   d.checkLabel:SetPoint("LEFT", d.check, "RIGHT", 2, 1)
+  -- Aviso en naranja (Ctrl+clic: anunciar todas pese a las alertas); oculto si no hay
+  d.warn = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  d.warn:SetPoint("TOP", d.text, "BOTTOM", 0, -6)
+  d.warn:SetWidth(330)
+  d.warn:SetTextColor(1, 0.6, 0.2)
   d.note = d:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   d.note:SetPoint("TOPLEFT", d.check, "BOTTOMLEFT", 4, -1)
   d.note:SetWidth(320)
@@ -102,12 +109,15 @@ local function ConfirmDialog()
 end
 
 -- Anuncia `n` de `itemID` a `unit` cada uno (`hours` h), preguntando antes si la opción
--- está activada. `done`: lo que se hace después (repintar)
-function Sell.Post(itemID, n, unit, hours, done)
+-- está activada. `done`: lo que se hace después (repintar). `warn`: aviso que se ve sí o
+-- sí (en el diálogo o, sin confirmación, en el chat): anunciar todas pese a las alertas
+local WARN_H = 40 -- alto extra del diálogo con aviso (dos líneas)
+function Sell.Post(itemID, n, unit, hours, done, warn)
   if not n or n <= 0 then return end
   -- Sin confirmar: una sola unidad (un clic sin querer no hace daño), o si ahora no se
   -- puede (escaneando: PostOnAH ya lo dice)
   if n <= 1 or ES.db.noPostConfirm or (ES.Scanner and ES.Scanner:IsBusy()) then
+    if warn and not (ES.Scanner and ES.Scanner:IsBusy()) then ES:Print(warn) end
     ES.Ledger:PostOnAH(itemID, n, unit, hours)
     if done then done() end
     return
@@ -117,6 +127,13 @@ function Sell.Post(itemID, n, unit, hours, done)
   d.title:SetText(L["Anunciar en la Casa de Subastas"])
   d.text:SetText(string.format(L["¿Anunciar %d × %s a %s cada uno (%d h)?"], n,
     (ES.UI.ItemLabel(itemID, "#" .. itemID)), ES.Money(ES.Ledger.PostPrice(unit)), hours or 24))
+  -- (con aviso, el diálogo crece y la casilla baja para dejarle sitio)
+  d.warn:SetText(warn or "")
+  if warn then d.warn:Show() else d.warn:Hide() end
+  local extra = warn and WARN_H or 0
+  d:SetHeight(170 + extra)
+  d.check:ClearAllPoints()
+  d.check:SetPoint("TOPLEFT", 24, -78 - extra)
   d.check:SetChecked(false)
   d.checkLabel:SetText(L["No volver a preguntar"])
   d.note:SetText(L["Se puede volver a activar en /cj opciones (Confirmar antes de anunciar en la AH)."])
@@ -125,6 +142,24 @@ function Sell.Post(itemID, n, unit, hours, done)
   d:Show()
 end
 
+-- ¿Las alertas dejaron en la AH solo una parte de lo que podrías vender?
+local function Capped(e)
+  return (e.sellN or 0) > (e.ahN or 0) and e.verdict ~= "good"
+end
+Sell.Capped = Capped
+
+-- Aviso de anunciar todas pese a las alertas: qué dicen y cuánto depósito se arriesga
+local function AllWarning(e)
+  local deposit = e.depositUnit and ES.Calc.Deposit(e.depositUnit, e.sellN, ES.Calc.StackSize(e.itemID))
+  local label = ES.Market.LABELS and ES.Market.LABELS[e.verdict] or ""
+  if deposit and deposit > 0 then
+    return string.format(L["Las alertas del mercado dicen %s: puede que no se vendan todas. Si caducan, pierdes hasta %s de depósito."],
+      label, ES.Money(deposit))
+  end
+  return string.format(L["Las alertas del mercado dicen %s: puede que no se vendan todas."], label)
+end
+Sell.AllWarning = AllWarning
+
 local function RowClick(self, button)
   local e = self.entry
   if not e then return end
@@ -132,11 +167,17 @@ local function RowClick(self, button)
     if ES.Inventory then ES.Inventory.SetNeverSell(e.itemID, true) end
     return
   end
+  local refresh = function() C_Timer.After(0.6, function() Sell:Refresh() end) end
+  -- Ctrl+clic: todas las que podrías vender, sin el tope de las alertas (avisando)
+  if IsControlKeyDown and IsControlKeyDown() and Capped(e) then
+    Sell.Post(e.itemID, e.sellN, e.listPrice, e.hours, refresh, AllWarning(e))
+    return
+  end
   -- Clic: todas las que la fila dice que vendas en la AH (lo normal; esa cantidad ya
   -- es prudente: lo dudoso, pocas y a 8 h), como en la pestaña Inventario.
   -- Mayús+clic: una sola, para probar el precio (como Mayús en las bolsas: una parte)
   local n = (IsShiftKeyDown and IsShiftKeyDown()) and 1 or e.ahN
-  Sell.Post(e.itemID, n, e.listPrice, e.hours, function() C_Timer.After(0.6, function() Sell:Refresh() end) end)
+  Sell.Post(e.itemID, n, e.listPrice, e.hours, refresh)
 end
 
 local function RowEnter(self)
@@ -150,9 +191,19 @@ local function RowEnter(self)
     GameTooltip:Show()
     return
   end
-  GameTooltip:AddLine(string.format(L["Clic: anunciar %d."], self.entry.ahN), 0.5, 0.8, 1)
-  if self.entry.ahN > 1 then
+  local e = self.entry
+  -- Por qué solo unas pocas: el consejo de probar (como en la vista Ruta)
+  if Capped(e) then
+    GameTooltip:AddLine(string.format(L["Consejo: pon solo %d en la AH a %s para probar y vende el resto al vendedor; si se venden, anuncia más."],
+      e.ahN, ES.Money(e.listPrice)), 1, 0.82, 0, true)
+    GameTooltip:AddLine(" ")
+  end
+  GameTooltip:AddLine(string.format(L["Clic: anunciar %d."], e.ahN), 0.5, 0.8, 1)
+  if e.ahN > 1 then
     GameTooltip:AddLine(L["Mayús+clic: anunciar solo 1."], 0.5, 0.8, 1)
+  end
+  if Capped(e) then
+    GameTooltip:AddLine(string.format(L["Ctrl+clic: anunciar las %d, sin hacer caso a las alertas."], e.sellN), 0.5, 0.8, 1)
   end
   GameTooltip:AddLine(L["Clic derecho: no venderlo nunca."], 0.6, 0.6, 0.6)
   GameTooltip:Show()
@@ -331,6 +382,7 @@ function Sell:Refresh()
   local function H(fs) return math.min(tonumber(fs:GetStringHeight()) or 12, 40) end
   local y = -(10 + H(panel.title) + 3 + H(panel.sub) + 8)
   local shown = math.min(#list, MAX_ROWS)
+  local anyCapped = false
   for i = 1, shown do
     local row, e = panel.rows[i], list[i]
     row.entry = e
@@ -341,9 +393,13 @@ function Sell:Refresh()
     row.icon:SetTexture(texture or (GetItemIcon and GetItemIcon(e.itemID)) or 134400)
     row.name:SetText((ES.UI.ItemLabel(e.itemID, "#" .. e.itemID)))
     -- Cuántos y a cuánto se anuncian, la duración y lo que dicen las alertas
+    -- (si las alertas dejan solo unas pocas, de cuántas: "5 de 77")
     local verdict = ES.Market.LABELS and ES.Market.LABELS[e.verdict]
-    row.qty:SetText(string.format(L["Anuncias %d × %s · %d h"], e.ahN, ES.Money(e.listPrice), e.hours or 24)
-      .. (verdict and (" · " .. verdict) or ""))
+    local capped = Capped(e)
+    anyCapped = anyCapped or capped
+    local qty = capped and string.format(L["Anuncias %d de %d × %s · %d h"], e.ahN, e.sellN, ES.Money(e.listPrice), e.hours or 24)
+      or string.format(L["Anuncias %d × %s · %d h"], e.ahN, ES.Money(e.listPrice), e.hours or 24)
+    row.qty:SetText(qty .. (verdict and (" · " .. verdict) or ""))
     row.cost:SetText(GREEN .. "+" .. ES.Money(e.ahN * (e.ahUnit or 0)) .. "|r")
     row:Show()
   end
@@ -360,12 +416,14 @@ function Sell:Refresh()
   local KEY = "|cff80ccff"
   local hint = KEY .. L["Clic"] .. "|r  " .. L["anunciar todas"] .. "\n"
     .. KEY .. L["Mayús+clic"] .. "|r  " .. L["anunciar solo 1"] .. "\n"
+    .. (anyCapped and (KEY .. L["Ctrl+clic"] .. "|r  " .. L["todas, sin las alertas"] .. "\n") or "")
     .. KEY .. L["Clic derecho"] .. "|r  " .. L["no venderlo nunca"]
   if #list > shown then
     hint = hint .. "\n" .. GREY .. string.format(L["(%d más en la pestaña Inventario)"], #list - shown) .. "|r"
   end
   panel.hint:SetText(hint)
-  y = y - 4 - math.max(14, math.min(tonumber(panel.hint:GetStringHeight()) or 0, 70))
+  -- (hasta 5 líneas: con Ctrl+clic y "N más en la pestaña Inventario")
+  y = y - 4 - math.max(14, math.min(tonumber(panel.hint:GetStringHeight()) or 0, 90))
   panel:SetHeight(-y + 10)
   self:UpdateWait()
   panel:Show()

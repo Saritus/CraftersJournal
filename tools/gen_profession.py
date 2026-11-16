@@ -76,6 +76,55 @@ RANK_BIT = {75: 1, 150: 2, 225: 4, 300: 8}
 NPC_FLAG_TRAINER = 16
 FOREVER_NPC_IDS = 200000  # los PNJ nuevos de Forever tienen ID altos (p. ej. 251991)
 OVERRIDES = HERE / "forever" / "trainer_overrides.csv"
+
+# Hotfixes de Blizzard que el volcado DB2 de wago todavía no refleja (notas oficiales
+# de WoW: Forever, 6-13 de noviembre de 2026). Quitar cuando wago los traiga.
+# Cantidades de reactivos: {spell: {item: cantidad}} (hotfix del 11 de noviembre)
+REAGENT_HOTFIXES = {
+    12079: {4339: 5},  # Red Mageweave Bag: 4 -> 5 Bolt of Mageweave
+    6693: {4305: 5},   # Green Silk Pack: 4 -> 5 Bolt of Silk Cloth
+    6695: {4305: 6},   # Black Silk Pack: 5 -> 6 Bolt of Silk Cloth
+    3758: {2997: 5},   # Green Woolen Bag: 4 -> 5 Bolt of Woolen Cloth
+    6688: {2997: 5},   # Red Woolen Bag: 4 -> 5 Bolt of Woolen Cloth
+}
+# Umbrales de puntos: {spell: (amarilla, gris)}
+SKILL_HOTFIXES = {
+    3326: (50, 90),       # Coarse Grinding Stone: da puntos hasta 90 (era 75), 10 nov
+    1263031: (125, 130),  # Tanning Rack: 15 menos (era 140/145), 6 nov (y de campamento: gris a 125)
+}
+# Recetas de campamento (de Camp Tent a Expert Campfire): se ponen grises donde antes
+# se ponían amarillas (hotfixes de noviembre). Las que ya salen grises al aprenderlas
+# (Camp Tent a 20, Anvil a 140, Tanning Rack a 125) no dan ningún punto
+CAMP_RECIPES = {
+    1229432,  # Camp Tent
+    1229504, 1263425,  # Faction Banner (Horda, Alianza)
+    1229737,  # Basic Campfire
+    1230117,  # First Aid Kit
+    1230171,  # Sharpening Wheel
+    1230564,  # Mana Well
+    1230643,  # Enchanted Lute
+    1230656,  # Reagent Bot
+    1262978,  # Cookie's Feast
+    1262996,  # Toxin Study
+    1263005,  # Fermenter
+    1263031,  # Tanning Rack
+    1263032,  # Spinning Wheel
+    1263034,  # Repair Bot
+    1263041,  # Anvil
+    1263056,  # Arcane Salvager
+    1283400,  # Journeyman Campfire
+    1291341,  # Expert Campfire
+}
+# Nivel que pide un pergamino: {item: habilidad}
+SCROLL_SKILL_HOTFIXES = {
+    273096: 125,  # Plans: Tanning Rack, 125 (era 140), 6 nov
+}
+# Herramienta que pide una receta: {spell: categoría de TOOL_ITEMS}
+TOOL_HOTFIXES = {
+    1263056: 375,  # Arcane Salvager: Runed Golden Rod (era Runed Truesilver Rod), 10 nov
+}
+# Ya no se ligan al recogerlo (10 nov): Swiftfeather Arrow, Swiftstrike Shot
+NOT_BOP_HOTFIXES = {274387, 274388}
 FOREVER_FEES = HERE / "forever" / "trainer_fees.csv"
 RECIPEBOOK_TRAINERS = HERE / "forever" / "recipebook_trainers.csv"
 FOREVER_SELL = HERE / "forever" / "sell_prices.csv"
@@ -179,6 +228,9 @@ def load_common():
         lst = [(int(r[f"Reagent_{k}"]), int(r[f"ReagentCount_{k}"])) for k in range(8)
                if int(r[f"Reagent_{k}"] or 0) and int(r[f"ReagentCount_{k}"] or 0)]
         reagents[int(r["SpellID"])] = lst
+    for spell, fixes in REAGENT_HOTFIXES.items():
+        if spell in reagents:
+            reagents[spell] = [(i, fixes.get(i, q)) for i, q in reagents[spell]]
     creates = {}
     for r in rows("SpellEffect_forever"):
         if r["Effect"] == "24" and r["EffectItemType"] not in ("", "0"):
@@ -200,6 +252,8 @@ def load_common():
             item_rep[iid] = (int(r["MinFactionID"]), int(r["MinReputation"] or 0))
         if r.get("RequiredSkillRank", "0") not in ("", "0"):
             item_skill[iid] = int(r["RequiredSkillRank"])
+    item_skill.update(SCROLL_SKILL_HOTFIXES)
+    item_bop -= NOT_BOP_HOTFIXES
     item_class = {int(r["ID"]): (int(r["ClassID"]), int(r["SubclassID"])) for r in rows("Item_forever")}
 
     # Pergamino de cada receta. Si hay varios (Forever reeditó algunos con ID nuevo,
@@ -219,6 +273,7 @@ def load_common():
     for r in rows("TotemCategory_forever"):
         if int(r["ID"]) in TOOL_ITEMS:
             tool_masks[int(r["ID"])] = int(r["TotemCategoryMask"])
+    tools.update(TOOL_HOTFIXES)
 
     # Instructores (CMaNGOS): por receta, el más barato; por línea, los rangos y quién enseña qué
     fees, ranks, trainers = {}, defaultdict(dict), defaultdict(dict)
@@ -395,10 +450,17 @@ def main():
         if r.get("TradeSkillCategoryID", "") == "0":
             continue
         orange, yellow, grey = int(r["MinSkillLineRank"]), int(r["TrivialSkillLineRankLow"]), int(r["TrivialSkillLineRankHigh"])
+        yellow, grey = SKILL_HOTFIXES.get(spell, (yellow, grey))
+        camp = spell in CAMP_RECIPES
+        if camp:
+            # Gris en la antigua amarilla: naranja (punto seguro) hasta ahí y nada después
+            # (Planner.PointChance con amarilla == gris). Se quedan aunque no den ningún
+            # punto (Camp Tent, Anvil...): siguen en la colección de recetas
+            grey = yellow
         if any(i not in c["item_info"] for i, _ in c["reagents"].get(spell, [])):
             impossible.append(spell)
             continue
-        if spell in c["reagents"] and c["reagents"][spell] and yellow < grey:
+        if spell in c["reagents"] and c["reagents"][spell] and (yellow < grey or camp):
             recipes[spell] = (c["reagents"][spell], c["creates"].get(spell))
             thresholds[spell] = (orange, yellow, (yellow + grey) // 2, grey)
 

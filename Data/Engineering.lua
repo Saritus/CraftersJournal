@@ -202,9 +202,9 @@ ES.Data.Engineering = {
     [1221012] = { name = "Creepy Censor Sensors", t = { 1, 275, 277, 280 }, scroll = 236872, train = 250, sq = 2, r = { { 8170, 8 }, { 12800, 2 } }, tool = 14, out = { 236871, 1 }, oq = 1 },
     [1226206] = { name = "Tinkerbox", t = { 1, 260, 270, 280 }, scroll = 250400, train = 250, sq = 1, r = { { 10561, 1 }, { 10558, 2 } }, tool = 14, out = { 238737, 1 }, oq = 1 },
     [1228088] = { name = "Pop-Up Shrub", t = { 1, 255, 257, 260 }, scroll = 239222, train = 250, sq = 3, r = { { 15994, 1 }, { 10560, 1 }, { 4382, 1 } }, tool = 14, out = { 237023, 1 }, oq = 1 },
-    [1230656] = { name = "Reagent Bot", t = { 1, 20, 22, 25 }, fee = 0, train = 20, r = { { 4359, 1 }, { 4361, 1 } }, out = { 279950, 1 }, oq = 1 },
+    [1230656] = { name = "Reagent Bot", t = { 1, 20, 20, 20 }, fee = 0, train = 20, r = { { 4359, 1 }, { 4361, 1 } }, out = { 279950, 1 }, oq = 1 },
     [1249634] = { name = "Sandpaper", t = { 1, 130, 142, 155 }, fee = 500, train = 120, tr = { 5174, 8736, 11017, 249235 }, r = { { 249425, 2 }, { 2996, 1 } }, out = { 249432, 1 }, oq = 2 },
-    [1263034] = { name = "Repair Bot", t = { 1, 140, 142, 145 }, scroll = 273092, train = 140, sq = 2, r = { { 4375, 2 }, { 4371, 1 }, { 4234, 1 } }, out = { 279949, 1 }, oq = 1 },
+    [1263034] = { name = "Repair Bot", t = { 1, 140, 140, 140 }, scroll = 273092, train = 140, sq = 2, r = { { 4375, 2 }, { 4371, 1 }, { 4234, 1 } }, out = { 279949, 1 }, oq = 1 },
     [1266893] = { name = "SAF-T Tabs", t = { 1, 25, 27, 30 }, scroll = 264201, train = 25, sq = 1, favor = 45, r = { { 2570, 1 }, { 249409, 1 } }, out = { 260784, 1 }, oq = 1 },
     [1266905] = { name = "SAF-T Dynamite", t = { 1, 25, 30, 35 }, scroll = 264202, train = 25, sq = 1, favor = 45, r = { { 4357, 2 }, { 2589, 1 } }, out = { 260792, 1 }, oq = 1 },
     [1266906] = { name = "SAF-T Copper Bomb", t = { 1, 55, 60, 65 }, scroll = 264203, train = 55, sq = 1, favor = 45, r = { { 2840, 1 }, { 4359, 1 }, { 4357, 2 }, { 2570, 1 }, { 260784, 2 } }, tool = 162, out = { 260793, 1 }, oq = 1 },
@@ -245,8 +245,8 @@ ES.Data.Engineering = {
     [1286792] = { name = "Centaur Banner Deployment Device", t = { 1, 190, 197, 205 }, scroll = 269901, train = 190, scrollPrice = 3000, sq = 2, r = { { 4387, 6 }, { 4389, 2 }, { 10558, 4 }, { 4234, 30 } }, tool = 14, out = { 269900, 1 }, oq = 2 },
     [1286796] = { name = "Hoof-Shaped Foot Pedal", t = { 1, 150, 155, 160 }, scroll = 269903, train = 140, scrollPrice = 3000, sq = 2, r = { { 4387, 3 }, { 4382, 2 }, { 4389, 1 }, { 10558, 1 }, { 4234, 4 } }, tool = 14, out = { 269902, 1 }, oq = 1 },
     [1293088] = { name = "9-60 Battery Pack", t = { 1, 125, 135, 145 }, scroll = 274049, train = 115, sq = 1, r = { { 249409, 1 }, { 249391, 1 }, { 3575, 1 } }, tool = 14, out = { 274048, 1 }, oq = 1 },
-    [1293849] = { name = "Swiftfeather Arrow", t = { 1, 310, 315, 320 }, scroll = 274389, train = 300, sq = 4, r = { { 251291, 8 }, { 17056, 5 }, { 7069, 1 } }, out = { 274387, 200 }, oq = 4, bop = true },
-    [1293850] = { name = "Swiftstrike Shot", t = { 1, 310, 315, 320 }, scroll = 274390, train = 300, sq = 4, r = { { 251291, 8 }, { 12365, 8 }, { 7067, 1 } }, out = { 274388, 200 }, oq = 4, bop = true },
+    [1293849] = { name = "Swiftfeather Arrow", t = { 1, 310, 315, 320 }, scroll = 274389, train = 300, sq = 4, r = { { 251291, 8 }, { 17056, 5 }, { 7069, 1 } }, out = { 274387, 200 }, oq = 4 },
+    [1293850] = { name = "Swiftstrike Shot", t = { 1, 310, 315, 320 }, scroll = 274390, train = 300, sq = 4, r = { { 251291, 8 }, { 12365, 8 }, { 7067, 1 } }, out = { 274388, 200 }, oq = 4 },
     [1302161] = { name = "Harvester Override Signalcaster", t = { 1, 65, 72, 80 }, scroll = 277470, train = 65, sq = 1, r = { { 255007, 4 }, { 4363, 2 }, { 4405, 1 } }, tool = 162, out = { 277132, 1 }, oq = 2, bop = true },
     [1306546] = { name = "SAF-T Ultra Precision Scope", t = { 1, 310, 317, 325 }, scroll = 279321, train = 300, sq = 4, r = { { 251290, 1 }, { 251291, 12 } }, tool = 14, out = { 279272, 1 }, oq = 3 },
     [1306547] = { name = "Hyper Deluxe Sniper Rifle Mk XVII", t = { 1, 310, 317, 325 }, scroll = 279322, train = 300, sq = 4, r = { { 274030, 4 }, { 251290, 2 }, { 251291, 10 }, { 12800, 1 } }, tool = 14, out = { 279273, 1 }, oq = 4 },
@@ -370,7 +370,7 @@ ES.Data.SellPrices[4386] = 175
 ES.Data.SellPrices[4387] = 400
 ES.Data.SellPrices[4388] = 1000
 ES.Data.SellPrices[4389] = 750
-ES.Data.SellPrices[4390] = 500
+ES.Data.SellPrices[4390] = 125
 ES.Data.SellPrices[4391] = 4000
 ES.Data.SellPrices[4392] = 2500
 ES.Data.SellPrices[4393] = 2632

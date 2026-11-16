@@ -443,3 +443,40 @@ function Market.AddToTooltip(itemID)
   end
   return s
 end
+
+---------------------------------------------------------------------------
+-- Precios de otros addons (Auctionator, TSM) cuando tu escaneo no tiene el objeto.
+-- Solo de respaldo y solo para decidir qué proponer vender (pestaña Inventario y la
+-- ventana del vendedor): no se guardan en tus escaneos, no cuentan para el historial
+-- ni para las señales de mercado (ese addon da un número, sin cantidades). Si el addon
+-- no está o cambia su API, nil (pcall) y todo sigue como sin él.
+-- Desactivable: ES.db.noAddonPrices (Options.lua)
+---------------------------------------------------------------------------
+local CALLER = "CraftersJournal"
+local ADDON_PRICE_MAX_DAYS = 3 -- Auctionator: más viejo que esto no se usa
+
+-- { price, source = "Auctionator" | "TSM", age (días, si se sabe) } o nil
+function Market:AddonPrice(itemID)
+  if not itemID or (ES.db and ES.db.noAddonPrices) then return nil end
+  local atr = Auctionator and Auctionator.API and Auctionator.API.v1
+  if atr and atr.GetAuctionPriceByItemID then
+    local ok, price = pcall(atr.GetAuctionPriceByItemID, CALLER, itemID)
+    if ok and type(price) == "number" and price > 0 then
+      local age
+      if atr.GetAuctionAgeByItemID then
+        local okAge, days = pcall(atr.GetAuctionAgeByItemID, CALLER, itemID)
+        if okAge and type(days) == "number" then age = days end
+      end
+      if not age or age <= ADDON_PRICE_MAX_DAYS then
+        return { price = price, source = "Auctionator", age = age }
+      end
+    end
+  end
+  if TSM_API and TSM_API.GetCustomPriceValue then
+    local ok, price = pcall(TSM_API.GetCustomPriceValue, "DBMinBuyout", "i:" .. itemID)
+    if ok and type(price) == "number" and price > 0 then
+      return { price = price, source = "TSM" }
+    end
+  end
+  return nil
+end

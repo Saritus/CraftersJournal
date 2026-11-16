@@ -9,6 +9,12 @@ local GREEN, GREY, ORANGE = "|cff40ff40", "|cff999999", "|cffff9933"
 local MORE_IDEAS = 15 -- además del lote
 local MAX_AVOIDED = 8
 local MAX_LEARNABLE = 10
+-- Franja de cifras bajo la cabecera, la línea de estado y la lista
+local STRIP_GAP, STRIP_H, STATUS_GAP, LIST_GAP = 6, 52, 4, 8
+-- Distancia de la cabecera a la lista, con la línea de estado de `statusH` píxeles
+local function ListGap(statusH)
+  return STRIP_GAP + STRIP_H + STATUS_GAP + math.max(12, math.ceil(tonumber(statusH) or 12)) + LIST_GAP
+end
 -- De dónde se aprende (los mismos textos que la ruta, ProfessionUI.lua)
 local LEARN_LABEL = ES.Localize({ trainer = "instructor", vendor = "receta del vendedor", scroll = "pergamino AH", favor = "Merchant's Favor",
   quest = "misión", ah = "pergamino en la AH", owned = "pergamino en tus bolsas" })
@@ -285,33 +291,38 @@ function ES:CreateEarnPage(page)
 
 
   local strip = CreateFrame("Frame", nil, page)
-  strip:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 4, -6)
-  strip:SetPoint("TOPRIGHT", head, "BOTTOMRIGHT", -4, -6)
-  strip:SetHeight(46)
+  strip:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 4, -STRIP_GAP)
+  strip:SetPoint("TOPRIGHT", head, "BOTTOMRIGHT", -4, -STRIP_GAP)
+  strip:SetHeight(STRIP_H)
   page.stats = {}
+  -- Columnas: la de lo que inviertes es la más ancha (lleva debajo "ya tienes · pagas",
+  -- con dos cantidades en monedas)
   local STATS = {
-    { key = "invest", label = L["Inviertes en materiales"] },
-    { key = "profit", label = L["Beneficio si se vende todo"] },
-    { key = "count",  label = L["Recetas en el lote"] },
+    { key = "invest", label = L["Inviertes en materiales"], x = 6,   w = 290 },
+    { key = "profit", label = L["Beneficio si se vende todo"], x = 306, w = 230 },
+    { key = "count",  label = L["Recetas en el lote"], x = 546, w = 200 },
   }
-  for i, s in ipairs(STATS) do
+  for _, s in ipairs(STATS) do
     local label = Label(strip, s.label, "GameFontDisableSmall")
-    label:SetPoint("TOPLEFT", (i - 1) * 196 + 6, -2)
+    label:SetPoint("TOPLEFT", s.x, -2)
+    label:SetWidth(s.w)
+    label:SetJustifyH("LEFT")
+    label:SetWordWrap(false)
     local value = Label(strip, "", "GameFontHighlightLarge")
-    value:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -3)
+    value:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -4)
     page.stats[s.key] = value
   end
   -- Debajo de lo que inviertes: lo que ya llevas y lo que pagas (Earn.FromBags). Con el
   -- ratón, qué materiales son
   page.investBags = Label(strip, "", "GameFontDisableSmall")
-  page.investBags:SetPoint("TOPLEFT", page.stats.invest, "BOTTOMLEFT", 0, -1)
-  page.investBags:SetWidth(188) -- (su columna: no se mete en la de Beneficio)
+  page.investBags:SetPoint("TOPLEFT", page.stats.invest, "BOTTOMLEFT", 0, -3)
+  page.investBags:SetWidth(STATS[1].w - 8) -- (su columna: no se mete en la de Beneficio)
   page.investBags:SetJustifyH("LEFT")
   page.investBags:SetWordWrap(false)
   page.investHover = CreateFrame("Frame", nil, strip)
   page.investHover:SetPoint("TOPLEFT", page.stats.invest, "TOPLEFT", 0, 0)
   page.investHover:SetPoint("BOTTOMLEFT", page.investBags, "BOTTOMLEFT", 0, 0)
-  page.investHover:SetWidth(188)
+  page.investHover:SetWidth(STATS[1].w - 8)
   page.investHover:EnableMouse(true)
   page.investHover:SetScript("OnEnter", function(self)
     local bags = page.bags
@@ -328,12 +339,15 @@ function ES:CreateEarnPage(page)
   end)
   page.investHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
   page.status = Label(page, "", "GameFontHighlightSmall")
-  page.status:SetPoint("TOPLEFT", strip, "BOTTOMLEFT", 2, -2)
-  page.status:SetPoint("RIGHT", strip, "RIGHT", 0, 0)
+  page.status:SetPoint("TOPLEFT", strip, "BOTTOMLEFT", 2, -STATUS_GAP)
+  page.status:SetPoint("RIGHT", strip, "RIGHT", -4, 0)
   page.status:SetJustifyH("LEFT")
-  page.status:SetWordWrap(false)
+  page.status:SetJustifyV("TOP")
+  page.status:SetWordWrap(true) -- (larga, con el mínimo: en dos líneas, no cortada)
+  if page.status.SetMaxLines then page.status:SetMaxLines(2) end
 
-  local list = ES.UI.ListPanel(page, head, 70)
+  local list = ES.UI.ListPanel(page, head, ListGap(12))
+  page.head, page.list = head, list
   local scroll = ES.UI.WheelScroll(list)
   scroll:SetPoint("TOPLEFT", 8, -8)
   scroll:SetPoint("BOTTOMRIGHT", -8, 8)
@@ -430,6 +444,8 @@ function ES:RenderEarn()
     status = status .. GREY .. string.format(L[" · %d por debajo del mínimo de %s|r"], hidden, ES.Money(res.minLine))
   end
   page.status:SetText(status)
+  -- La lista empieza debajo del estado, que puede ocupar una o dos líneas
+  page.list:SetPoint("TOPLEFT", page.head, "BOTTOMLEFT", 0, -ListGap(page.status:GetStringHeight()))
 
   local lines = {}
   if #res.batch > 0 and Section(lines, "batch", L["Lote de hoy"], #res.batch) then
