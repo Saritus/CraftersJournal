@@ -960,6 +960,97 @@ step("instructores por rango (Forever)", function()
   assert(Has(ES.Waypoints.Trainers("Tailoring", 60), 1300), "Lawrence Schneider enseña Aprendiz y sus recetas")
   assert(Has(ES.Waypoints.Trainers("Tailoring", 300), 11052), "Timothy Worthington enseña Artesano")
 end)
+step("material que sale más barato fabricar pero da puntos: se explica por qué se compra", function()
+  -- Discord: Heavy Blasting Powder (3s 68c fabricada, 4s 22c en la AH) se compraba para
+  -- Heavy Dynamite. Las dos dan puntos en 125-145: cada pólvora fabricada quita un punto a
+  -- la dinamita, que es lo que gana dinero. El tooltip solo explicaba el caso contrario
+  local P, eng = ES.Planner, ES.Data.Engineering
+  P.Annotate(eng)
+  local powder = eng.recipes[3945]
+  local plan = { steps = { { id = 3946, recipe = eng.recipes[3946], from = 125, to = 145, reagents = { { item = 4377 } } } } }
+  local st = P.CraftTakesPoints(plan, 4377, powder)
+  assert(st and st.id == 3946, "la pólvora aún da puntos donde la gasta la dinamita: debería decirlo")
+  plan.steps[1].from = 145
+  assert(P.CraftTakesPoints(plan, 4377, powder) == nil, "a 145 la pólvora ya está gris: fabricarla no quita puntos")
+  plan.steps[1].from, plan.steps[1].reagents = 125, { { item = 2592 } }
+  assert(P.CraftTakesPoints(plan, 4377, powder) == nil, "ningún paso gasta la pólvora: nada que explicar")
+end)
+step("recetas de instructores de un rango superior (Green Iron Bracers a 144, Discord)", function()
+  -- Forever subió Green Iron Bracers (140) a los instructores de Experto (Bengus, Saru) y
+  -- Artesano (Brikk Keencraft): con Oficial (tope 150) nadie te la enseña. La ruta 144-150
+  -- mandaba a Booty Bay a aprenderla, y al quitarla no quedaba alternativa
+  local P, bs = ES.Planner, ES.Data.Blacksmithing
+  P.Annotate(bs)
+  local gib, legs, hammer = bs.recipes[3501], bs.recipes[3506], bs.recipes[9985]
+  assert(gib.rankCap == 225 and legs.rankCap == 225, "Green Iron Bracers/Leggings: piden Experto")
+  assert(not hammer.rankCap, "Bronze Warhammer la enseña el de Oficial: sin requisito de rango")
+  -- Solo las Green Iron (visto en el juego): las demás que los datos dan a instructores de
+  -- un rango superior, sin ningún caso visto, siguen igual (Nightscape Pants, Heavy Mithril)
+  P.Annotate(ES.Data.Leatherworking)
+  assert(not ES.Data.Leatherworking.recipes[10548].rankCap and not bs.recipes[9959].rankCap,
+    "la regla de rango solo para Green Iron Bracers/Helm/Leggings")
+  -- A quién manda la flecha: los de Experto (Saru, Bengus), no Brikk (Artesano, Booty Bay)
+  local tr = {}
+  for _, npc in ipairs(gib.rankTr or {}) do tr[npc] = true end
+  assert(tr[3355] and tr[4258] and not tr[2836], "Green Iron Bracers: a Saru o Bengus, no a Brikk Keencraft")
+  local savedKnown, savedScans = ES.IsRecipeKnown, ES.db.scans
+  ES.IsRecipeKnown = function() return false end
+  assert(P.LearnSkill(gib, { from = 144, to = 150, cap = 150 }) == nil, "con Oficial y objetivo 150 no se puede aprender")
+  assert(P.LearnSkill(gib, { from = 144, to = 150 }) == nil, "sin tope conocido, a 144 se supone Oficial")
+  assert(P.LearnSkill(gib, { from = 144, to = 150, cap = 225 }) == 140, "con Experto sí, a 140")
+  -- Si la ruta pasa de 150 entrena Experto (desde 125): desde entonces sí
+  assert(P.LearnSkill(gib, { from = 100, to = 200, cap = 150 }) == 140, "la ruta que entrena Experto sí la usa")
+  assert(P.LearnSkill(legs, { from = 100, to = 200, cap = 150 }) == 130, "Green Iron Leggings: a 130 con Experto")
+  assert(P.LearnSkill(hammer, { from = 144, to = 150, cap = 150 }) == 100, "las demás, igual que antes")
+  -- La ruta 144-150 con Oficial: sin las de Experto, y llega a 150 (también quitando una)
+  local items = {}
+  for _, r in pairs(bs.recipes) do
+    for _, rq in ipairs(r.r or {}) do items[rq[1]] = { minUnit = 100, quantity = 1000 } end
+  end
+  ES.db.scans = { [ES:RealmKey()] = { time = time(), items = items } }
+  local opts = ES:PlanOptions("Blacksmithing", 144, 150, 150)
+  local plan = P:Plan(bs, opts)
+  assert(not plan.stoppedAt and #plan.steps > 0, "la ruta 144-150 debería llegar a 150")
+  for _, st in ipairs(plan.steps) do
+    assert(not st.recipe.rankCap, "la ruta usa una receta que pide Experto: " .. st.recipe.name)
+  end
+  opts = ES:PlanOptions("Blacksmithing", 144, 150, 150)
+  opts.excluded = { [plan.steps[1].id] = true }
+  local other = P:Plan(bs, opts)
+  assert(not other.stoppedAt and #other.steps > 0 and other.steps[1].id ~= plan.steps[1].id,
+    "quitando la receta de la ruta debería salir otra hasta 150")
+  -- Ruta empezada: sus precios guardados son solo los de sus objetos (RoutePrices). Las
+  -- alternativas de cada paso se miran con el último escaneo: con solo los guardados
+  -- ninguna otra receta tenía precio ("ninguna otra sirve sin cambiar el resto")
+  local ids = {}
+  for _, st in ipairs(plan.steps) do
+    for _, rq in ipairs(st.recipe.r) do ids[rq[1]] = true end
+    if st.recipe.out then ids[st.recipe.out[1]] = true end
+  end
+  for _, tl in ipairs(plan.tools or {}) do ids[tl.item] = true end
+  local lockOpts = ES:PlanOptions("Blacksmithing", 144, 150, 150)
+  lockOpts.prices = {}
+  for id in pairs(ids) do lockOpts.prices[id] = items[id] end
+  lockOpts.forced, lockOpts.via, lockOpts.fullInfo = plan.choice, plan.ctx.via, true
+  local locked = P:Plan(bs, lockOpts)
+  local st = locked.steps[1]
+  local function CountAlts()
+    local n = 0
+    for _, id in ipairs(P.AlternativeCandidates(bs, locked, st)) do
+      if P.EvaluateAlternative(bs, locked, st, id) then n = n + 1 end
+    end
+    return n
+  end
+  locked.altPrices = lockOpts.prices -- (como antes: solo los precios guardados)
+  local before = CountAlts()
+  locked.altPrices = nil
+  local after = CountAlts()
+  assert(after > 0 and after > before, "ruta empezada: el paso debería tener alternativas (" .. before .. " -> " .. after .. ")")
+  assert(locked.altPrices and locked.altPrices[next(lockOpts.prices)] == lockOpts.prices[next(lockOpts.prices)],
+    "lo de la ruta, con sus precios guardados")
+  log[#log+1] = string.format("     144-150 con Oficial: %s; ruta empezada: %d -> %d alternativas", st.recipe.name, before, after)
+  ES.IsRecipeKnown, ES.db.scans = savedKnown, savedScans
+end)
 step("sin variables globales sueltas", function()
   assert(#LEAKS == 0, "globales: " .. table.concat(LEAKS, ", "))
 end)
@@ -3204,6 +3295,62 @@ step("rutas repartidas entre fotogramas (sin tirones)", function()
   C_Timer.After = realAfter
   ES.GetProfessionSkill = savedSkill
   ES:SelectPage("home")
+end)
+step("precio que sube de golpe: TSM y probar la AH si el depósito compensa (Star Ruby)", function()
+  -- Discord: Star Ruby a 85s en la AH (toda la semana a ~50-60s) se mandaba al vendedor
+  -- a 50s: el precio inflado se contaba a ~58s y tras la comisión no compensaba
+  local RUBY = 7910
+  local bags = { { RUBY, 1 } }
+  local savedCC, savedScans, savedVendor = C_Container, ES.db.scans, ES.VendorSellPrice
+  local savedRef, savedSig, savedTSM = ES.Market.ReferencePrice, ES.Market.Signals, TSM_API
+  C_Container = {
+    GetContainerNumSlots = function(bag) return bag == 0 and #bags or 0 end,
+    GetContainerItemID = function(bag, slot) return bags[slot] and bags[slot][1] end,
+    GetContainerItemInfo = function(bag, slot) local b = bags[slot] return b and { stackCount = b[2] } end,
+  }
+  ES.VendorSellPrice = function() return 5000 end
+  ES.db.scans = { [ES:RealmKey()] = { time = time() - 600, items = { [RUBY] = { minUnit = 8534, quantity = 300 } } } }
+  ES.Market.ReferencePrice = function() return 5068, 3, 0 end
+  ES.Market.Signals = function() return { verdict = "good" } end
+  local function Ruby()
+    ES.Market.ClearTSM()
+    for _, e in ipairs(ES.Inventory:List()) do if e.itemID == RUBY then return e end end
+  end
+  -- Sin TSM: inflado, pero en la AH al precio real compensa aunque se pierda el depósito
+  TSM_API = nil
+  local e = Ruby()
+  assert(e and e.fair.inflated and e.tryRise, "Star Ruby: subida de golpe, se prueba la AH")
+  assert(e.ahN == 1 and e.listPrice == 8533, "se anuncia al precio real (85s33): " .. tostring(e.listPrice))
+  -- TSM dice que en la región se vende a ~84s: la subida es real, no es precio inflado
+  local tsm = { rate = 300, sold = 20000, avg = 8400 }
+  TSM_API = { GetCustomPriceValue = function(src) if src:find("SaleRate") then return tsm.rate end
+    if src:find("SoldPerDay") then return tsm.sold end if src:find("SaleAvg") then return tsm.avg end end }
+  e = Ruby()
+  assert(e and not e.fair.inflated and e.fair.tsmSupported and e.ahN == 1 and e.listPrice == 8533, "TSM respalda el precio nuevo")
+  -- TSM: se vende de media a 52s, muy por debajo de 85s: no se prueba, al vendedor
+  tsm.avg = 5200
+  e = Ruby()
+  assert(e and e.fair.inflated and not e.tryRise and e.ahN == 0 and e.vendorN == 1, "TSM dice que se vende mucho más barato: al vendedor")
+  -- TSM: casi no se vende (poca demanda): tampoco
+  tsm.avg, tsm.sold, tsm.rate = 8400, 100, 10
+  e = Ruby()
+  assert(e and e.fair.inflated and not e.tryRise and e.ahN == 0, "TSM dice que casi no se vende: al vendedor")
+  -- El depósito no es exagerado para lo que ganas: 77s (73s tras la comisión) menos
+  -- 10s de depósito sigue sacando más que 50s del vendedor: se prueba la AH
+  TSM_API = nil
+  ES.db.scans[ES:RealmKey()].items[RUBY].minUnit = 7700
+  ES.Market.ReferencePrice = function() return 4000, 3, 0 end
+  e = Ruby()
+  assert(e and e.tryRise and e.ahN == 1, "77s: compensa arriesgar el depósito")
+  -- Exagerado: 60s (57s tras la comisión) menos 10s de depósito no llega a 50s: al vendedor
+  ES.db.scans[ES:RealmKey()].items[RUBY].minUnit = 6000
+  ES.Market.ReferencePrice = function() return 3500, 3, 0 end
+  e = Ruby()
+  assert(e and e.ahN == 0 and e.vendorN == 1, "60s: el depósito se come lo que ganas, al vendedor")
+  log[#log+1] = string.format("     Star Ruby: 85s a la AH (probando 1); 77s a la AH; 60s al vendedor (depósito %s)", ES.Money(e.depositRisk or 0))
+  C_Container, ES.db.scans, ES.VendorSellPrice = savedCC, savedScans, savedVendor
+  ES.Market.ReferencePrice, ES.Market.Signals, TSM_API = savedRef, savedSig, savedTSM
+  ES.Market.ClearTSM()
 end)
 step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
   -- Bolsas: 20 Light Leather (la ruta fijada necesita 5), 3 de un objeto que ha subido,
@@ -5473,6 +5620,22 @@ step("ganar dinero: enfriamientos listos en el lote", function()
     local found
     for _, c in ipairs(ES.Earn:Cooldowns()) do if c.id == id then found = c end end
     assert(found and not found.ready and not found.unknown and found.left > 7000, "sección: en marcha, con lo que falta")
+    -- Cuándo estará lista, con la hora del ordenador del jugador (date del juego) y su
+    -- ajuste de 12/24 h: "Listo hoy 18:40 (en 2 h)", "Listo viernes 14:30 (en 95 h)"
+    local savedDate, savedCVar = date, GetCVarBool
+    date = os.date
+    GetCVarBool = function() return true end
+    local base = os.time({ year = 2026, month = 11, day = 17, hour = 10, min = 0 })
+    local function Has(s, pat) return s and s:find(pat, 1, true) end
+    assert(Has(ES.LocalTimeLabel(base + 7200, base), os.date("%H:%M", base + 7200)), "hoy: con la hora")
+    assert(ES.LocalTimeLabel(base + 7200, base) ~= ES.LocalTimeLabel(base + 86400 + 7200, base), "mañana no se dice como hoy")
+    local friday = ES.LocalTimeLabel(base + 95 * 3600, base)
+    assert(Has(friday, os.date("%H:%M", base + 95 * 3600)) and Has(friday, os.date("%A", base + 95 * 3600)), "a 95 h: el día de la semana y la hora: " .. tostring(friday))
+    assert(Has(ES.LocalTimeLabel(base + 10 * 86400, base), os.date("%d/%m", base + 10 * 86400)), "a más de 6 días: la fecha")
+    GetCVarBool = function() return false end
+    assert(Has(ES.LocalTimeLabel(base + 7200, base), "12:00 PM"), "reloj de 12 horas: " .. tostring(ES.LocalTimeLabel(base + 7200, base)))
+    date, GetCVarBool = savedDate, savedCVar
+    log[#log+1] = "     enfriamiento: listo " .. tostring((function() date = os.date local s = ES.LocalTimeLabel(base + 95 * 3600, base) date = savedDate return s end)())
     -- Pasa el tiempo: vuelve al lote sin vaciar nada a mano
     NOW = NOW + 7300
     res = ES.Earn:Ideas()

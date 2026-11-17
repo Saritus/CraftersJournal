@@ -960,6 +960,14 @@ local function ShopTooltip(it, plan)
       if craftUnit > it.unit then
         GameTooltip:AddLine(string.format(L["Comprarlo hecho sale más barato (%s frente a %s por unidad), así que el plan lo compra."],
           ES.Money(it.unit), ES.Money(craftUnit)), 0.6, 1, 0.6, true)
+      else
+        -- Más barato fabricarlo y aun así se compra: su receta da puntos donde se usa
+        -- (Heavy Blasting Powder para Heavy Dynamite). Sin decirlo parecía un error
+        local st = it.source == "ah" and ES.Planner.CraftTakesPoints(plan, it.itemID, craftRecipe)
+        if st then
+          GameTooltip:AddLine(string.format(L["Fabricarlo sale más barato por unidad, pero a ese nivel también da puntos: cada uno que fabriques es una fabricación menos de %s (%d-%d). Contando la ruta entera, comprarlo sale igual o mejor."],
+            st.recipe.name, st.from, st.to), 0.6, 1, 0.6, true)
+        end
       end
     end
     if it.source == "vendor" then
@@ -2948,8 +2956,10 @@ local function RouteLines(plan, page, opts)
         pick, label = function() return seenAt end, L["Instructor donde la viste"]
       elseif trainer and r.tr then
         -- Los datos dicen quién la enseña (no el del rango por nivel: Green Iron
-        -- Leggings, de 130, la enseñan los de Experto)
-        pick, label = function() return WP.Nearest(r.tr) end, L["Instructor más cercano"]
+        -- Leggings, de 130, la enseñan los de Experto); de ellos, los del rango que pide
+        -- (rankTr, ver Planner RankGate: a Bengus o Saru, no a Brikk en Booty Bay)
+        local who = r.rankTr or r.tr
+        pick, label = function() return WP.Nearest(who) end, L["Instructor más cercano"]
       elseif upRank then
         local nextRank = (math.floor(math.max(0, learnAt - 1) / 75) + 1) * 75 + 1
         pick, label = WP.Target("trainer", page.profKey, nextRank), L["Instructor del rango siguiente"]

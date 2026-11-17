@@ -191,6 +191,19 @@ function Inventory:List()
       local listPrice = ES.Market.ListPrice(fair)
       -- Lo que te queda es tras la comisión: el depósito se devuelve al venderse
       local verdict = ES.Market:Signals(id).verdict
+      -- Precio inflado (ha subido de golpe): para estimar se cuenta el de los últimos
+      -- días, pero lo que ya llevas tiene el vendedor de suelo. Se prueban unas pocas en
+      -- la AH al precio real si, aun perdiendo el depósito una vez, sale mejor que el
+      -- vendedor (ver abajo), salvo que TSM diga que se vende poco o bastante más barato.
+      -- Discord: Star Ruby a 85s en la AH (antes ~50-60s) iba al vendedor a 50s
+      if fair.inflated then
+        local d = ES.Market:Demand(id)
+        local against = d.known and (d.flag or (d.avg and d.avg < fair.current * ES.Market.TSM_LOW_PRICE))
+        if not against then
+          e.tryRise, listPrice = true, math.max(1, fair.current - 1)
+          if verdict == "good" then verdict = "watch" end -- (unas pocas, con el riesgo del depósito)
+        end
+      end
       e.hours = verdict == "good" and AH_HOURS_GOOD or AH_HOURS_RISKY
       local perUnit, cut = ES.Planner.AuctionCosts(vendor, { hours = e.hours, neutral = ES:IsNeutralAH() })
       local net = listPrice and listPrice * (1 - cut)
@@ -373,7 +386,13 @@ local function Tooltip(e, noActions)
       GameTooltip:AddLine(string.format(L["Ha subido un %d%%: los últimos días estaba a ~%s."], math.floor(e.rise * 100 + 0.5), ES.Money(e.ref)),
         0.4, 1, 0.4, true)
     end
-    ES.Market.AddFairToTooltip(e.fair)
+    if e.tryRise and e.ahN > 0 then
+      -- (al precio real: la línea de "se cuenta a" del precio inflado no vale aquí)
+      GameTooltip:AddLine(string.format(L["Ha subido de golpe y puede que no se venda a este precio: se prueba con %d. Si caduca solo pierdes el depósito y lo sigues pudiendo vender al vendedor (%s)."],
+        e.ahN, ES.Money(e.vendorUnit)), 1, 0.82, 0, true)
+    else
+      ES.Market.AddFairToTooltip(e.fair)
+    end
     if e.ahN > 0 or e.verdict then ES.Market.AddToTooltip(e.itemID) end
     if noActions then
       GameTooltip:Show()

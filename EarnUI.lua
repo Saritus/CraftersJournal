@@ -23,6 +23,30 @@ local function ItemLabel(itemID, fallback)
   return ES.UI.ItemLabel(itemID, fallback)
 end
 
+-- Cuándo, con el reloj y la zona horaria del ordenador del jugador (date() del juego) y
+-- su ajuste de 12 o 24 horas (reloj del juego): "hoy 18:40", "mañana 9:15 PM",
+-- "viernes 14:30" (nombres del día del propio cliente) o "21/11 14:30" a más de 6 días.
+-- nil si no hay date() (fuera del juego)
+function ES.LocalTimeLabel(when, now)
+  if not date then return nil end
+  local t = date("*t", when)
+  local use24 = true
+  if GetCVarBool then
+    local ok, v = pcall(GetCVarBool, "timeMgrUseMilitaryTime")
+    if ok and v == false then use24 = false end
+  end
+  local clock = use24 and string.format("%02d:%02d", t.hour, t.min)
+    or string.format("%d:%02d %s", (t.hour + 11) % 12 + 1, t.min, t.hour < 12 and "AM" or "PM")
+  local day = date("%Y-%m-%d", when)
+  if day == date("%Y-%m-%d", now) then return string.format(L["hoy %s"], clock) end
+  if day == date("%Y-%m-%d", now + 86400) then return string.format(L["mañana %s"], clock) end
+  if when - now < 6 * 86400 then
+    local names = CALENDAR_WEEKDAY_NAMES
+    return ((names and names[t.wday]) or date("%A", when)) .. " " .. clock
+  end
+  return date("%d/%m", when) .. " " .. clock
+end
+
 local function IdeaTooltip(idea)
   return function(row)
     local e = idea.e
@@ -520,7 +544,11 @@ function ES:RenderEarn()
       if c.unknown then
         sub = GREY .. L["Abre la profesión para saber si está listo"] .. "|r"
       elseif not c.ready then
-        sub = string.format(L["Listo en %d h"], math.ceil(c.left / 3600))
+        -- Con la hora exacta en tu reloj: "Listo viernes 14:30 (en 95 h)"
+        local now = time()
+        local at = ES.LocalTimeLabel(now + c.left, now)
+        sub = at and string.format(L["Listo %s (en %d h)"], at, math.ceil(c.left / 3600))
+          or string.format(L["Listo en %d h"], math.ceil(c.left / 3600))
       elseif c.inBatch then
         sub = GREEN .. L["Listo: está en el lote de hoy"] .. "|r"
       else

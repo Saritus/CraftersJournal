@@ -158,7 +158,11 @@ local function GoFor(e, s)
     -- deja algunas en otro rango: Green Iron Leggings, los de Experto); si no, el del rango
     local seen = ES.db.trainerFees and ES.db.trainerFees[e.id] and ES.db.trainerFees[e.id].npc
     if seen then return function() return seen end end
-    if e.recipe.tr then return function() return WP.Nearest(e.recipe.tr) end end
+    if e.recipe.tr then
+      ES.Planner.Annotate(ES.Data[e.profKey]) -- (rankTr: los del rango que pide; ver Planner RankGate)
+      local who = e.recipe.rankTr or e.recipe.tr
+      return function() return WP.Nearest(who) end
+    end
     return WP.Target("trainer", e.profKey, e.level)
   end
   if (s.kind == "vendor" or s.kind == "rep" or (s.kind == "favor" and #s.vendors > 0)) and e.recipe.scroll then

@@ -261,7 +261,8 @@ end
 ---------------------------------------------------------------------------
 local REF_DAYS, REF_GAP = 3, 6 * HOUR
 local INFLATED, PREMIUM, DEFLATED = 1.5, 1.15, 1 / 1.5
-Market.INFLATED, Market.PREMIUM = INFLATED, PREMIUM
+local TSM_SUPPORTS = 0.9 -- venta media de TSM de al menos un 90% del mínimo de ahora: la subida es real
+Market.INFLATED, Market.PREMIUM, Market.TSM_SUPPORTS = INFLATED, PREMIUM, TSM_SUPPORTS
 
 -- Devuelve referencia, nº de días usados y hace cuántos días es el más reciente
 -- Se guarda por escaneo (en el índice): los planes la piden muchas veces por objeto
@@ -308,6 +309,14 @@ function Market:FairPrice(itemID, currentMin)
   local ref, days, ago = self:ReferencePrice(itemID)
   local fp = { price = currentMin, current = currentMin, ref = ref, days = days, ago = ago, noHistory = ref == nil }
   if ref and currentMin > ref * INFLATED then
+    -- TSM sabe a cuánto se vende de verdad en la región: si se vende (sin poca demanda)
+    -- y su venta media llega a lo de ahora, la subida es real y no se recorta (Star Ruby
+    -- y Citrine subieron de golpe el 17-11: 300 y 1.300 a la venta al precio nuevo)
+    local d = self:Demand(itemID)
+    if d.known and not d.flag and d.avg and d.avg >= currentMin * TSM_SUPPORTS then
+      fp.tsmSupported, fp.tsmAvg = true, d.avg
+      return fp
+    end
     fp.inflated = true
     fp.price = math.min(currentMin, math.floor(ref * PREMIUM + 0.5))
   elseif ref and currentMin < ref * DEFLATED then
@@ -329,6 +338,9 @@ function Market.AddFairToTooltip(fp)
     if fp.ago and fp.ago >= 2 then
       GameTooltip:AddLine(string.format(L["(el último escaneo con historial es de hace %d días)"], fp.ago), 0.7, 0.7, 0.7, true)
     end
+  elseif fp.tsmSupported then
+    GameTooltip:AddLine(string.format(L["Ha subido (los últimos días, ~%s), pero según TSM en la región se vende a ~%s: se cuenta al precio de ahora."],
+      ES.Money(fp.ref), ES.Money(fp.tsmAvg)), 0.6, 1, 0.6, true)
   elseif fp.deflated then
     GameTooltip:AddLine(string.format(L["Más barato que de costumbre (~%s los últimos días): alguien malvende. Para vender ahora hay que igualarlo."],
       ES.Money(fp.ref)), 1, 0.82, 0, true)
@@ -361,6 +373,7 @@ Market.TSM_RATE_STEPS = { 0, 0.05, 0.1, 0.15, 0.25, 0.4, 0.6 }
 Market.TSM_SOLD_STEPS = { 0, 0.25, 0.5, 1, 2, 5, 10 }
 Market.TSM_MIN_RATE, Market.TSM_MIN_SOLD = 0.15, 1 -- (por defecto)
 local TSM_LOW_PRICE = 0.75 -- aviso si la venta media es menos de esto de nuestro precio
+Market.TSM_LOW_PRICE = TSM_LOW_PRICE
 Market.TSM_SELL_DAYS = 2   -- tope del lote: lo que se vende en la región en estos días
 
 local function Setting(key, default)

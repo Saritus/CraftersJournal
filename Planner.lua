@@ -489,10 +489,63 @@ local function Known(recipe)
   return recipe.id and ES.IsRecipeKnown and ES:IsRecipeKnown(recipe.id)
 end
 
--- Cada receta guarda su id (el hechizo) para poder preguntar si ya se sabe
+-- Tope del rango que enseña un instructor (máscara de Data/<Prof>.lua trainers): el más
+-- bajo que enseña (1 aprendiz 75, 2 oficial 150, 4 experto 225, 8 artesano 300)
+local MASK_CAPS = { { 1, 75 }, { 2, 150 }, { 4, 225 }, { 8, 300 } }
+local function MaskCap(mask)
+  for _, mc in ipairs(MASK_CAPS) do
+    if mask % (mc[1] * 2) >= mc[1] then return mc[2] end
+  end
+end
+
+-- Rango que hace falta para que un instructor te enseñe una receta. En Forever cada
+-- rango tiene sus instructores y sus recetas: las que Forever subió de rango (Green
+-- Iron Bracers/Helm/Leggings, de 130-145, solo las enseñan los de Experto: Bengus
+-- Deepforge, Saru Steelfury, y Brikk Keencraft, de Artesano) no te las enseña nadie
+-- mientras no tengas ese rango. Discord: a 144 con Oficial (nivel 10, Experto pide 20),
+-- la ruta mandaba a Booty Bay a aprender Green Iron Bracers y Brikk no se la enseñaba.
+-- r.tr = los únicos que la enseñan (ver tools/gen_profession.py); si ninguno es del
+-- rango que le tocaría por su nivel, hace falta el más bajo de los de ellos.
+-- Solo en las recetas en que se ha visto en el juego (RANK_GATED): en otras 27 los datos
+-- dicen lo mismo, pero sin ningún caso visto, y aplicarlo a todas cambiaba rutas (la de
+-- Peletería 120-225 con Oficial se paraba en 220). Si se confirma en más, se añaden aquí
+local RANK_GATED = {
+  [3501] = true, -- Green Iron Bracers (Discord: Brikk no se la enseñó a un Oficial de nivel 10)
+  [3502] = true, -- Green Iron Helm
+  [3506] = true, -- Green Iron Leggings (solo la enseñan los de Experto, ver CHANGELOG)
+}
+local function RankGate(data, r)
+  if not (RANK_GATED[r.id] and r.tr and r.train and data.trainers and data.ranks) then return end
+  local masks = {}
+  for _, t in ipairs(data.trainers) do masks[t[1]] = t[2] end
+  local need
+  for _, npc in ipairs(r.tr) do
+    local cap = masks[npc] and MaskCap(masks[npc])
+    if not cap then return end -- instructor sin rango conocido: no se sabe, sin requisito
+    need = need and math.min(need, cap) or cap
+  end
+  local own = r.train <= 75 and 75 or r.train <= 150 and 150 or r.train <= 225 and 225 or 300
+  if not need or need <= own then return end
+  -- A quién ir: los de ese rango (Bengus, Saru), no los de uno aún más alto (Brikk)
+  local at = {}
+  for _, npc in ipairs(r.tr) do
+    if MaskCap(masks[npc]) == need then at[#at + 1] = npc end
+  end
+  local prev = APPRENTICE_CAP
+  for _, rank in ipairs(data.ranks) do
+    if rank[1] == need then return need, rank[3], prev, at end
+    prev = rank[1]
+  end
+end
+
+-- Cada receta guarda su id (el hechizo) para poder preguntar si ya se sabe, y el rango
+-- que pide su instructor (rankCap, rankSkill, rankPrev, rankTr; ver RankGate)
 local function Annotate(data)
   if data._annotated then return end
-  for id, r in pairs(data.recipes) do r.id = id end
+  for id, r in pairs(data.recipes) do
+    r.id = id
+    r.rankCap, r.rankSkill, r.rankPrev, r.rankTr = RankGate(data, r)
+  end
   data._annotated = true
 end
 Planner.Annotate = Annotate
@@ -513,6 +566,19 @@ function Planner.LearnSkill(recipe, opts)
   if Sourced(recipe, opts) then
     local src = ES.Waypoints.RecipeSource(recipe, opts.prices or ScanPrices(), opts.noQuests, opts.noLimited)
     return src and src.best and (recipe.train or 1) or nil
+  end
+  if fee and recipe.rankCap and opts.from and opts.to then
+    -- Solo la enseñan instructores de un rango superior (ver RankGate): con ese rango
+    -- ya entrenado, o si la ruta lo entrena (pasa de su tope anterior; ver Plan, rangos),
+    -- desde que lo entrena. Si no, no la enseña nadie
+    -- (tope sin conocer: el del rango que cubre tu nivel, como en Plan; ese es menor
+    -- que el que pide justo cuando aún no has pasado el tope anterior)
+    local below
+    if opts.cap then below = opts.cap < recipe.rankCap else below = opts.from < recipe.rankPrev end
+    if below then
+      if opts.to <= recipe.rankPrev then return nil end
+      return math.max(train or 1, recipe.rankSkill)
+    end
   end
   if fee or recipe.intermediate then return train end
   if recipe.basic then return 1 end -- se aprende sola al coger la profesión (dato del cliente)
@@ -881,6 +947,20 @@ function Planner.CraftUnitCost(ctx, itemID)
     end
   end
   return best, bestRecipe
+end
+
+-- Material que se compra aunque fabricarlo salga más barato por unidad, porque su receta
+-- aún da puntos donde se usa: cada uno que fabricases sería un punto que daría el paso
+-- que lo gasta. Devuelve ese paso (el primero que lo gasta con la receta aún con puntos)
+-- o nil. Discord: Heavy Blasting Powder (3s 68c fabricada, 4s 22c en la AH) se compraba
+-- para Heavy Dynamite, con los mismos umbrales (125/135/145) y que gana dinero vendida
+function Planner.CraftTakesPoints(plan, itemID, recipe)
+  if not (recipe and recipe.t) then return nil end
+  for _, st in ipairs(plan.steps or {}) do
+    for _, rg in ipairs(st.reagents or {}) do
+      if rg.item == itemID and st.id ~= recipe.id and Planner.Chance(recipe.t, st.from) > 0 then return st end
+    end
+  end
 end
 
 -- Coste de los materiales de `crafts` fabricaciones; devuelve también el
@@ -2813,6 +2893,20 @@ end
 -- unfollowable (de la ruta con ella) }, o nil si así no se llega igual de lejos
 function Planner.EvaluateAlternative(data, plan, st, id)
   local o = Copy(plan.ctx.opts)
+  if o.prices then
+    -- Ruta fijada: sus precios guardados son solo los de los objetos de sus recetas
+    -- (ver RoutePrices en ProfessionUI). Con ellos, cualquier otra receta se quedaba sin
+    -- precio para sus materiales y ningún paso tenía alternativa ("ninguna otra sirve
+    -- sin cambiar el resto de la ruta", Discord: Green Iron Bracers a 144). Lo de la ruta
+    -- con sus precios guardados; lo demás, con los del último escaneo
+    if not plan.altPrices then
+      local merged = {}
+      for itemID, entry in pairs(ScanPrices()) do merged[itemID] = entry end
+      for itemID, entry in pairs(o.prices) do merged[itemID] = entry end
+      plan.altPrices = merged
+    end
+    o.prices, o.shared = plan.altPrices, nil
+  end
   o.forced = {}
   for s, c in pairs(plan.choice) do o.forced[s] = c end
   for s = st.from, st.to - 1 do o.forced[s] = id end
