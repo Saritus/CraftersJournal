@@ -194,12 +194,13 @@ function Inventory:List()
       -- Precio inflado (ha subido de golpe): para estimar se cuenta el de los últimos
       -- días, pero lo que ya llevas tiene el vendedor de suelo. Se prueban unas pocas en
       -- la AH al precio real si, aun perdiendo el depósito una vez, sale mejor que el
-      -- vendedor (ver abajo), salvo que TSM diga que se vende poco o bastante más barato.
+      -- vendedor (ver abajo), salvo que TSM diga que casi no se vende (poca demanda).
+      -- Su venta media no cuenta en contra: es de antes de la subida y va por detrás
+      -- (Star Ruby: TSM a 55s de media, pero 100 vendidas al día y un 72% de venta).
       -- Discord: Star Ruby a 85s en la AH (antes ~50-60s) iba al vendedor a 50s
       if fair.inflated then
         local d = ES.Market:Demand(id)
-        local against = d.known and (d.flag or (d.avg and d.avg < fair.current * ES.Market.TSM_LOW_PRICE))
-        if not against then
+        if not (d.known and d.flag) then
           e.tryRise, listPrice = true, math.max(1, fair.current - 1)
           if verdict == "good" then verdict = "watch" end -- (unas pocas, con el riesgo del depósito)
         end

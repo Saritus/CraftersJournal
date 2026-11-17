@@ -3327,10 +3327,11 @@ step("precio que sube de golpe: TSM y probar la AH si el depósito compensa (Sta
     if src:find("SoldPerDay") then return tsm.sold end if src:find("SaleAvg") then return tsm.avg end end }
   e = Ruby()
   assert(e and not e.fair.inflated and e.fair.tsmSupported and e.ahN == 1 and e.listPrice == 8533, "TSM respalda el precio nuevo")
-  -- TSM: se vende de media a 52s, muy por debajo de 85s: no se prueba, al vendedor
-  tsm.avg = 5200
+  -- TSM: venta media de 55s (de antes de la subida) pero se vende mucho: se prueba igual.
+  -- Los datos de TSM del juego el 17-11: Star Ruby 55s07 de media, ~102 al día, 72%
+  tsm.avg = 5507
   e = Ruby()
-  assert(e and e.fair.inflated and not e.tryRise and e.ahN == 0 and e.vendorN == 1, "TSM dice que se vende mucho más barato: al vendedor")
+  assert(e and e.fair.inflated and e.tryRise and e.ahN == 1 and e.listPrice == 8533, "la media de TSM va por detrás: se prueba la AH")
   -- TSM: casi no se vende (poca demanda): tampoco
   tsm.avg, tsm.sold, tsm.rate = 8400, 100, 10
   e = Ruby()
