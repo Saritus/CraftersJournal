@@ -269,3 +269,49 @@ Respuestas del jugador (2026-10-14):
 - Desencantamiento: ahora en G2.
 - Vista de colección de todas las profesiones a la vez (logros por cuenta).
 - Avisos de enfriamiento listo al entrar al juego.
+
+## I. Mejoras pendientes de la prueba de Alchemy 0-150 (2026-11-17)
+
+Apuntadas mientras se prueba en el juego; se resuelven al final de la prueba.
+
+### Lista de compra
+- [ ] **Selector "Por tramos / Ruta entera" también en la página de la Lista de compra.** Hoy solo está en la fila de arriba de la vista Materiales de la ruta y cuesta encontrarlo (informe de un jugador: "no hay botón para fijar la ruta, sigue añadiendo ingredientes").
+- [ ] **Avisar al cambiar de tramo:** en el chat o en la lista, p. ej. "Tramo 60-90: nuevos materiales", para que no parezca que la lista "añade cosas" sola.
+- [ ] Opcional: **preguntar al pulsar Empezar ruta** cómo se quiere la lista (por tramos o la ruta entera).
+- [ ] Revisar en el juego si el **margen de cada tramo** sobra o falta, y que lo que llevas en las bolsas descuente bien al pasar de un tramo a otro.
+
+### Asistente
+- [x] **Un solo modo de compra (cambiado el 2026-11-17):** los pasos de compra del asistente siguen el modo de la Lista de compra (`BuyMode` en ProfessionUI.lua). Con la ruta entera, el paso pide toda la ruta y dice "ruta entera"; comprado, los tramos siguientes ya no piden nada. Se cambia en la fila de la vista Materiales o con la bolsa / caja de la pestaña de arriba del asistente. Antes el asistente compraba siempre por tramos.
+- [x] **Pestaña de arriba a la derecha del asistente** (2026-11-17): [Por tramos / Ruta entera] [?] [X], se despliega con las demás; la flecha GPS pasa arriba a la izquierda.
+- [x] **Mercado dudoso: el resto se guarda, no al vendedor** (2026-11-17): con la alerta "vigilar" o sin datos, se anuncian unas pocas (AH_FEW) y el resto se guarda para anunciarlo cuando se vendan ("+33 después"), en Inventario, Profit, el panel de la AH y SaleAdvice. Antes iba al vendedor aunque en la AH valiera claramente más (Fire Oil: 1s frente a 2c). Texto corto en las filas, como Inventario.
+- [x] **Profit = Inventario para lo que llevas** (2026-11-17): en la pestaña Profit, qué hacer con lo fabricado que llevas en las bolsas sale de Inventory:List (último escaneo, las mismas reglas que Inventario y el panel de la AH). Antes usaba los precios fijados al empezar la ruta y otra regla (Rage Potion: "al vendedor" en la ruta, "a la AH" en el panel). Lo que aún no llevas sigue con el consejo de la ruta.
+- [x] **Sin menú del clic derecho** (2026-11-17): la UI del asistente es fija (sin bloquear ni tamaño desde el asistente; el tamaño guardado de antes ya no cuenta). El modo de compra, en la pestaña de arriba; bloquear y lo demás, en /cj opciones.
+- [x] **Rango que ya puedes entrenar antes de tu tope** (2026-11-17): se quedaba atrás sin aviso y parecía saltado. Ahora es el paso actual en cuanto puedes entrenarlo (en el mismo viaje que la receta o las compras), salvo a mitad de un paso de fabricar: entonces solo se recuerda ("entrena Journeyman antes de 75") y a tu tope pasa a ser el paso actual.
+- [x] Quitada la etiqueta BETA del asistente (se montaba con la flecha GPS, que pasa a la esquina izquierda).
+- [x] **Botón de la ventana en el asistente** (2026-11-17): el icono del addon, en lugar del engranaje, abre la ruta en la ventana grande bajando hasta el paso actual (quitar receta, opciones de la ruta, dejarla); otra vez, la cierra. Las opciones del asistente, en /cj opciones.
+- [x] **Orden de recados con menos viajes, en todas las rutas** (2026-11-17, `RouteLines`):
+  - Un rango que ya puedes entrenar es el paso actual justo antes de empezar a fabricar (primero la receta y las compras en la AH, luego el instructor), o si lo actual es aprender en el instructor. A mitad de fabricar o con recados pendientes, solo un aviso.
+  - En el instructor: "aprende también: X, Y" (recetas del instructor que la ruta usa más tarde y ya puedes aprender por nivel).
+  - En el instructor, si lo siguiente es fabricar y volver a él: "fabrica aquí hasta 104 y aprende Elixir of Wisdom sin irte".
+  - **Por tramos (decidido):** cada tramo compra solo lo suyo, para no perder dinero en lo que quizá no haga falta; el orden óptimo se aplica dentro del tramo. **Con la ruta entera** (lo elige el jugador), todo de golpe: los materiales ya los pide la ruta entera, y en la AH, "compra también la receta: X" con las recetas de la AH de más tarde.
+- [ ] Con la ruta entera, agrupar también las recetas de vendedor de más tarde (hoy solo las de la AH).
+- [ ] **Botón ? del asistente:** hoy solo un resumen en el tooltip. Hacer la explicación de cómo funciona (al pulsarlo).
+- [ ] Revisar en el juego que la flecha GPS (arriba a la izquierda) y la pestaña de arriba no se pisen, sobre todo en alemán, y que la X se encuentre (ahora sale al pasar el ratón).
+- [x] **Vendedor junto al instructor** (2026-11-17): si en el viaje toca el instructor, lo del vendedor se compra al de al lado del instructor (`WP.NearestTo`), no al más cercano a ti (solo si está a menos de 100 yardas de él; y de los que venden más materiales de la fila, `WP.VendorFor`). Si al abrir un vendedor no tiene un material (o está agotado), se apunta para la sesión y la fila lleva a otro de la lista. Orden del viaje: AH → buzón → instructor → vendedor de al lado → fabricar (`ArrangeTrip`: el paso actual es el primer recado pendiente).
+- [x] **Aprender con un clic en el instructor** (2026-11-17): con el instructor abierto, el paso de entrenar (rango o receta) del asistente o de la ventana aprende lo que toca y lo de "aprende también" (`Ledger.LearnAtTrainer`, de uno en uno; solo lo disponible).
+- [ ] Arreglar "Missing on/off parameter in SetTrainerServiceTypeFilter" (Ledger.lua, ReadAllTrainerServices): en Forever pide true/false; hoy falla la lectura de la lista entera del instructor (recetas quitadas o movidas).
+- [x] **Paso "Recoge el correo" en el asistente** (2026-11-17): tras las compras en la AH, te lleva al buzón más cercano (Data/Mailboxes.lua, 180 buzones de QuestieDB: `tools/gen_mailboxes.py`, solo en la copia de desarrollo como el asistente) y se da por hecho cuando lo comprado para la ruta está en tus bolsas. Sin ninguna función del correo. Se puede saltar.
+- [x] **Sin correo (2026-11-17):** el addon no lee el buzón (daba problemas; lo que llega puede venir de un intercambio o un alter). Lo comprado cuenta hasta que llega a las bolsas o pasan 2 h. Cada compra detectada se dice en el chat ("Compra detectada: X ×N"); si no sale, Saltar (también en los pasos de receta). Una receta comprada deja su paso hecho y el de fabricar dice "aprende X primero". Arreglado también: las recetas por nombre ("Recipe: Rage Potion", sin enlace) no se reconocían con el addon en otro idioma.
+- [x] **Hecho (2026-11-17), falta probarlo en el juego:** `Ledger.OnWay` (Ledger.lua: del mensaje "You won an auction", se borra al llegar a las bolsas, con el buzón abierto o en 1 h) y la pestaña "Saltar" del asistente (se despliega como la de las flechas; `routeBuyVisits.had`, por material de la AH). Lo saltado queda como paso hecho ("Saltado"): con la flecha de paso anterior se vuelve a él y la misma pestaña dice "Recuperar".
+- [ ] ~~**Lo comprado en la AH no cuenta hasta recogerlo del correo**~~ (asistente y Lista de compra: "Compra 21× Silverleaf · There wasn't enough" y "0 de 1" justo después de "You won an auction for [Silverleaf]x21"). Con varios materiales obliga a ir al buzón tras cada compra. `ES:HaveForShopping` solo mira las bolsas desde que se quitó `ES.db.ahOnWay` (se quedaba pegado: "48 en el correo" sin nada en el buzón). Propuesta, las dos cosas:
+  1. **"De camino" fiable:** apuntar lo comprado al confirmarse (mensaje "You won an auction for [x]×N" / evento de compra), que cuente como tuyo, y que se borre solo: al llegar a las bolsas, al abrir el buzón (leer el contenido del correo, que es la verdad) o pasado un tiempo (p. ej. 1 h). Así no se queda pegado como antes.
+  2. **Confirmación manual en el asistente:** en el paso de compra, "Ya lo tengo" pasa al siguiente paso (sirve también para compras por el chat de comercio, el banco de hermandad o un alter). Se olvida al cambiar de tramo.
+- [ ] **Aviso en el paso de compra con la lista en ruta entera:** debajo del paso, algo como "Este tramo · tu lista tiene la ruta entera", para que no parezca que la lista no se ha actualizado.
+
+### Navegación (unificada en esta tanda, falta probarla)
+- [x] **Minimapa sin nada (2026-11-17):** con el punto de ruta del juego marcado se escondían los puntos propios del minimapa, pero ese punto no se dibuja en el cliente del usuario. Los puntos propios vuelven a salir siempre (salvo con el camino de Shortest Path).
+- [ ] Probar en el juego `WP.Mark` sin Shortest Path ni TomTom: que el **punto de ruta del juego** salga en el mapa grande y el minimapa en el cliente de Forever. Si no funciona, volver a un pin propio en el mapa grande como respaldo.
+- [ ] Probar con Shortest Path Forever: que el asistente marque el camino a cada paso y que pulsar un PNJ en la ventana cambie también la flecha.
+
+### Ventana principal
+- [ ] Probar en el juego que las **pestañas laterales** no se salgan de la pantalla con la ventana junto a la AH o pegada al borde derecho (`SetClampRectInsets`, `ES:KeepTabsOnScreen`). Informe de la 0.60: "atascado en la Lista de compra, ni con /cj".

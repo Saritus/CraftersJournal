@@ -506,8 +506,14 @@ function Earn:Ideas()
             idea.signals = ES.Market:Signals(e.itemID)
             idea.verdict = idea.signals.verdict
             idea.price = ES.Market.ListPrice(e.fair) or 1
+            -- Con TSM: lo que en la región se vende poco (ventas al día o tasa de venta por
+            -- debajo de los mínimos) o muy por debajo del precio con el que contamos no entra
+            -- en el lote: va con las de "evitar" (Discord: Shadoweave Boots a ~2 al día y
+            -- 0,14 de tasa, en el lote de hoy)
+            local s = idea.signals
+            if s.demand.flag or ES.Market.TSMLowPrice(s, e.ahPrice or e.ahMin) then idea.tsmAvoid = true end
           end
-          if idea.verdict == "avoid" then
+          if idea.verdict == "avoid" or idea.tsmAvoid then
             -- (sin costear: con lo más que se fabricaría, ¿llegaría al mínimo?)
             if e.profit * (cooldown and 1 or MAX_BATCH) >= minLine then
               res.avoided[#res.avoided + 1] = idea
@@ -534,7 +540,7 @@ function Earn:Ideas()
           if idea.sellWhere == "vendor" then
             -- Se costea después del lote (con lo que el lote ya compra)
             res.vendor[#res.vendor + 1] = idea
-          elseif idea.verdict ~= "avoid" then
+          elseif idea.verdict ~= "avoid" and not idea.tsmAvoid then
             Earn.CostIdea(idea)
             -- (la que elegiste tú se queda aunque baje del mínimo: si no, desaparecía al pulsar −)
             if idea.custom or Earn.LineValue(idea) >= minLine then

@@ -157,8 +157,15 @@ local function MadeNeed(plan, level, to)
   return need
 end
 
+-- Colchón en los niveles verdes (desviaciones): menor que en amarillo, porque cerca del
+-- gris la incertidumbre es muy grande y se compraría mucho de más; pero no cero. Sin
+-- colchón, con mala suerte (la mitad de las veces) no llegabas y cada reposición
+-- compraba otra vez lo justo: 4 o 5 viajes seguidos a por Linen Cloth para Red Linen
+-- Bag (Discord). 0,75: te llega ~3 de cada 4 veces
+Planner.GREEN_Z = 0.75
+
 -- Lo que piden los niveles de `from` a `to`: { [itemID] = { expected, target } }.
--- target lleva el colchón (z desviaciones; en los niveles green(s), sin colchón) y va
+-- target lleva el colchón (z desviaciones; en los niveles green(s), GREEN_Z) y va
 -- en fabricaciones enteras: no se hace media receta (15 Light Leather no dan para 2
 -- Light Leather Pants, que piden 10 cada una: 20). Cada material se reparte entre las
 -- recetas que lo gastan y la parte de cada una se redondea a lo que pide por
@@ -175,7 +182,7 @@ local function Need(plan, from, to, z, green)
   local acc = {} -- [itemID] = { expected, var, shares = { [receta] = { q, per } }, other, first }
   local function Item(itemID)
     local a = acc[itemID]
-    if not a then a = { expected = 0, var = 0, shares = {}, other = 0 } acc[itemID] = a end
+    if not a then a = { expected = 0, var = 0, varGreen = 0, shares = {}, other = 0 } acc[itemID] = a end
     return a
   end
   local function Share(a, id, per, q)
@@ -192,7 +199,7 @@ local function Need(plan, from, to, z, green)
     for itemID, q in pairs(plan.pointNeed and plan.pointNeed[s] or {}) do
       local a = Item(itemID)
       a.expected = a.expected + q
-      if not g then a.var = a.var + q * q * (1 - p) end -- (en verde, sin colchón)
+      if g then a.varGreen = a.varGreen + q * q * (1 - p) else a.var = a.var + q * q * (1 - p) end
       local per = DirectQty(r, itemID)
       if per then Share(a, id, per, q) else a.other = a.other + q end
     end
@@ -213,7 +220,7 @@ local function Need(plan, from, to, z, green)
   local out = {}
   for itemID, a in pairs(acc) do
     -- El colchón, con la primera receta que lo gasta (es la que fabricas antes)
-    local margin = z * math.sqrt(a.var)
+    local margin = z * math.sqrt(a.var) + math.min(z, Planner.GREEN_Z) * math.sqrt(a.varGreen)
     if a.first then a.shares[a.first].q = a.shares[a.first].q + margin else a.other = a.other + margin end
     local target = math.ceil(a.other - 0.001)
     for _, sh in pairs(a.shares) do
@@ -283,7 +290,16 @@ end
 -- gastarla pide la siguiente: si tienes suerte no compras de más (Discord: subió
 -- Heavy Blasting Powder hasta 145 con mucho menos de lo que pedía la lista).
 -- phase.batchTo: hasta qué nivel llega la tanda
-Planner.BATCH_CRAFTS = 20
+-- (50: con 20, Linen Bag de 26 a 65 eran 8-9 viajes a la AH. Lo que sobra de una tanda
+-- se gasta en la siguiente del mismo paso: más grande solo arriesga sobrante al final)
+Planner.BATCH_CRAFTS = 50
+-- El tamaño de la tanda: el de las opciones (/cj opciones, Lista de compra: ES.db.batchCrafts)
+-- o el de por defecto. Más grande, menos viajes a comprar; más pequeña, menos sobrante
+Planner.BATCH_STEPS = { 20, 30, 50, 75, 100, 150 }
+function Planner.BatchCrafts()
+  local v = ES.db and ES.db.batchCrafts
+  return type(v) == "number" and v > 0 and v or Planner.BATCH_CRAFTS
+end
 
 local function GreenPoint(plan, s)
   local id = plan.choice and plan.choice[s]
@@ -293,16 +309,19 @@ local function GreenPoint(plan, s)
   return p < 0.5
 end
 
-function Planner.PhaseNeed(plan, level, z)
+-- `upTo`: hasta ese nivel y no la tanda (lo que falta para llegar a lo que compraste:
+-- ver Planner.Stocked)
+function Planner.PhaseNeed(plan, level, z, upTo)
   local phase = Planner.Phase(plan, level)
   if not phase then return {}, nil end
   z = z or Planner.PHASE_Z
   -- Hasta dónde: el tramo, o en verde la tanda (unas BATCH_CRAFTS fabricaciones)
   local batch -- fabricaciones de la tanda en verde
-  phase.batchTo = nil
-  for s = phase.from, phase.to - 1 do
+  phase.batchTo = upTo and upTo < phase.to and upTo or nil
+  local batchSize = Planner.BatchCrafts()
+  for s = phase.from, upTo and -1 or (phase.to - 1) do
     if GreenPoint(plan, s) then
-      if batch and batch >= Planner.BATCH_CRAFTS then
+      if batch and batch >= batchSize then
         phase.batchTo = s
         break
       end
@@ -312,6 +331,63 @@ function Planner.PhaseNeed(plan, level, z)
   end
   local out = Need(plan, phase.from, phase.batchTo or phase.to, z, function(s) return GreenPoint(plan, s) end)
   return out, phase
+end
+
+---------------------------------------------------------------------------
+-- Comprado, a fabricar. Al tener todo lo de la tanda (o del tramo) en el que estás,
+-- se apunta (con la ruta, en la partida: sobrevive a /reload) hasta qué nivel
+-- llega lo comprado. Desde ahí:
+--   · mientras puedas fabricar el paso, no se pide nada: lo que vas gastando es lo que
+--     compraste (antes la tanda iba con tu nivel y en verde pedía más con cada punto:
+--     "57× Bolt of Linen Cloth" con 24 en las bolsas y "Fabrica 35× Linen Bag");
+--   · si lo gastas todo sin poder seguir, se pide la tanda siguiente desde tu nivel
+--     (phase.refill = true): una compra para seguir, no lo justo para un punto;
+--   · al llegar al nivel apuntado se olvida
+-- Sin apunte (rutas empezadas antes, o comprado por otro lado) vale lo mismo una vez
+-- subido un punto en el paso
+---------------------------------------------------------------------------
+local function CurrentStep(plan, level)
+  for _, st in ipairs(plan and plan.steps or {}) do
+    if level >= st.from and level < st.to then return st end
+  end
+end
+
+local function MarkStore(profKey)
+  local s = ES.db and ES.db.prof and ES.db.prof[profKey]
+  local lock = ES.RouteLock and ES:RouteLock(profKey)
+  return s, lock
+end
+
+-- El apunte que cubre tu nivel: { from, to } o nil (de otra ruta, o ya llegaste)
+function Planner.Stocked(profKey, plan, level)
+  local s, lock = MarkStore(profKey)
+  local m = s and s.stocked
+  if not (m and lock and m.started == lock.started and level >= m.from and level < m.to) then return nil end
+  return m
+end
+
+function Planner.SetStocked(profKey, plan, level, to)
+  local s, lock = MarkStore(profKey)
+  if not (s and lock) then return end
+  local m = s.stocked
+  if m and m.started == lock.started and m.to == to and level >= m.from then return end
+  s.stocked = { started = lock.started, from = level, to = to }
+end
+
+-- ¿Puedes fabricar el paso en el que estás al menos una vez? (nil: no se sabe)
+local function CanCraftStep(plan, level)
+  local st = CurrentStep(plan, level)
+  if not (st and st.id and ES.CraftableFromBags) then return nil end
+  local n = ES.CraftableFromBags(st.id)
+  if n == nil then return nil end
+  return n >= 1
+end
+
+-- ¿Sigues con lo que llevas? (comprado y aún puedes fabricar)
+function Planner.PhaseHold(profKey, plan, level)
+  local st = CurrentStep(plan, level)
+  if not st or CanCraftStep(plan, level) ~= true then return false end
+  return Planner.Stocked(profKey, plan, level) ~= nil or level > st.from
 end
 
 -- Cuánto hace falta de cada material de la ruta de `profKey` desde `level`. ÚNICA
@@ -332,15 +408,53 @@ function Planner.RouteNeed(profKey, plan, level, opts)
   local byPhase = not (opts and opts.keep) and ES:RouteLock(profKey)
     and ((opts and opts.phase) or (ES.Shopping and ES.Shopping.ByPhase(profKey)))
   if byPhase then
+    -- Comprado, a fabricar (Planner.Stocked): mientras puedas fabricar, nada más; sin
+    -- poder, la tanda siguiente desde tu nivel (una sola compra). Antes pedía solo lo
+    -- que faltaba para llegar al nivel apuntado: 12 Bolt para un punto y, al llegar,
+    -- otra tanda: dos viajes seguidos (Discord, Linen Bag a 55)
+    local mark = Planner.Stocked(profKey, plan, level)
+    local hold = Planner.PhaseHold(profKey, plan, level)
     local need, phase = Planner.PhaseNeed(plan, level)
+    if not phase then return out, nil end
+    phase.hold = hold or nil
+    phase.refill = mark and not hold or nil
+    local function Raw(itemID) return ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID) or 0 end
+    -- (¿lo tienes todo?: con lo ya convertido, Bolt of Linen Cloth cuenta como su Linen Cloth)
+    local Have = ES.RouteHave and ES.RouteHave(plan, level) or Raw
+    local all = true
     for itemID, n in pairs(need) do
-      if n.target > 0 then out[itemID] = { need = n.target, expected = n.expected } end
+      local target = n.target
+      -- (sin pedir: lo que llevas tal cual, que es lo que cuenta la Lista de compra)
+      if hold then target = math.min(target, Raw(itemID)) end
+      if Have(itemID) < target then all = false end
+      if target > 0 then out[itemID] = { need = target, expected = n.expected } end
+    end
+    -- Lo tienes todo: se apunta hasta dónde llega (y desde ahí, a fabricar)
+    if all and not hold and next(need) then
+      Planner.SetStocked(profKey, plan, level, phase.batchTo or phase.to)
     end
     return out, phase
   end
+  -- La ruta entera, como una tanda grande (Discord: con "ruta entera", al fabricar una
+  -- te mandaba a comprar 1 Bolt of Linen Cloth): con la ruta empezada, tenerlo todo se
+  -- apunta (Planner.Stocked, hasta el final) y, mientras puedas fabricar el paso, no se
+  -- pide nada más; sin poder, lo que falta de la ruta desde tu nivel
+  local route = not (opts and opts.keep) and ES:RouteLock(profKey)
+  local hold = route and Planner.PhaseHold(profKey, plan, level)
+  local function Raw(itemID) return ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID) or 0 end
+  local Have = route and ES.RouteHave and ES.RouteHave(plan, level) or Raw
+  local all, any = true, false
   for itemID, q in pairs(Planner.NeedFrom(plan, level)) do
     local n = math.ceil(q - 0.001)
-    if n > 0 then out[itemID] = { need = n, expected = q } end
+    if hold then n = math.min(n, Raw(itemID)) end
+    if n > 0 then
+      any = true
+      if route and Have(itemID) < n then all = false end
+      out[itemID] = { need = n, expected = q }
+    end
+  end
+  if route and any and all and not hold then
+    Planner.SetStocked(profKey, plan, level, plan.reached or plan.to or level + 1)
   end
   return out, nil
 end
@@ -349,14 +463,26 @@ end
 -- final: lo que piden los niveles que te quedan, no los de toda la ruta. Con la ruta
 -- empezada y medio paso hecho (3 de 4 Brightcloth Robe) la fila seguía pidiendo los 20
 -- del principio (Discord). nil si el plan no lo sabe (sin pointUse)
-function Planner.CraftedNeedFrom(plan, itemID, level)
+-- `withOwned`: cuenta también lo que sale de tus bolsas: es lo que tienes que llevar
+-- (la fila "Fabrica N×" le resta lo que hay en las bolsas; si no, se restaban dos
+-- veces). Sin él, solo lo fabricado: lo que vale como su material ya convertido
+-- (ConvertedHave; lo que ya tenías al calcular la ruta no pidió material)
+function Planner.CraftedNeedFrom(plan, itemID, level, withOwned)
   if not plan.pointUse then return nil end
   local q = 0
   for s = level, (plan.reached or plan.to or level) - 1 do
     local u = plan.pointUse[s] and plan.pointUse[s][itemID]
-    if u then q = q + (u.craft or 0) end
+    if u then q = q + (u.craft or 0) + (withOwned and u.owned or 0) end
   end
   return q
+end
+
+-- Cuántas de un intermedio de plan.crafted gasta la ruta entera: las que fabricas y
+-- las que saca de tus bolsas. Con "usar lo de tus bolsas", quantity ya no cuenta las
+-- tuyas, y la fila les restaba otra vez lo que llevas: 57 Bolt of Silk Cloth, 10 en
+-- las bolsas, y decía "Fabrica 37× · 47 en total" (CurseForge)
+function Planner.CraftedTotal(c)
+  return c.quantity + (c.owned or 0)
 end
 
 -- Cómo vas en el tramo con lo que llevas (have(itemID) = unidades):
@@ -373,22 +499,6 @@ function Planner.PhaseOutlook(plan, level, have)
     if h < n.target then res.extra[itemID] = n.target - h end
   end
   return res
-end
-
--- Materiales intermedios que la ruta fabrica en cantidades desorbitadas: pasa cuando no
--- hay ninguno a la venta en tu escaneo (Medium Leather agotado) y la ruta hace toda la
--- cadena desde abajo (restos -> cuero ligero -> medio -> pesado: miles de fabricaciones,
--- baratas en oro pero absurdas en tiempo). { { itemID, crafts } }, de más a menos
-Planner.HUGE_CRAFTS = 250
-function Planner.HugeCrafts(plan)
-  local list = {}
-  for _, c in ipairs(plan and plan.crafted or {}) do
-    local per = c.recipe and c.recipe.out and c.recipe.out[2] or 1
-    local crafts = math.ceil((c.quantity or 0) / math.max(1, per) - 0.001)
-    if crafts > Planner.HUGE_CRAFTS then list[#list + 1] = { itemID = c.itemID, crafts = crafts } end
-  end
-  table.sort(list, function(a, b) return a.crafts > b.crafts end)
-  return list
 end
 
 -- Fabricaciones totales de un plan
@@ -411,6 +521,17 @@ function Planner.Chance(t, skill)
   if skill < yellow then return 1 end
   if skill >= grey then return 0 end
   return math.min(1, (grey - skill) / (grey - yellow) * (1 + (Planner.SKILL_BONUS or 0)))
+end
+
+-- Al ELEGIR la ruta, los puntos verdes se cuentan con algo de mala suerte: las
+-- fabricaciones esperadas (1/p) más GREEN_RISK desviaciones (√(1-p)/p). En verde la
+-- incertidumbre es grande y no subir el punto es caro y frustra (comprar una y otra vez:
+-- Discord, Red Linen Bag). Así, entre un verde y un naranja o amarillo que cuestan
+-- parecido, gana el seguro. El coste que enseña la ruta sigue siendo el medio
+Planner.GREEN_RISK = 0.5
+function Planner.GreenRisk(t, skill, chance)
+  if not (t and t[3]) or skill < t[3] or not chance or chance <= 0 or chance >= 1 then return 0 end
+  return Planner.GREEN_RISK * math.sqrt(1 - chance) / chance
 end
 
 -- Recetas con enfriamiento (Transmute: Iron to Gold, una al día; Mooncloth, cada
@@ -460,6 +581,11 @@ end
 -- Precio del instructor y nivel al que enseña la receta: lo visto en el juego
 -- (Ledger:ReadTrainer, CraftersJournalDB.trainerFees) manda sobre los datos
 function Planner.Fee(recipe)
+  -- Las que se aprenden solas al coger la profesión (dato del cliente) no se pagan,
+  -- aunque el instructor también las liste: Forever enseña Linen Bag "a 5 por 1s" a
+  -- quien aún no tiene Sastrería, y tomarlo por bueno dejaba vacía la ruta fijada que
+  -- la usaba desde 1 (captura del 2026-11-17)
+  if recipe.basic then return recipe.fee, recipe.train end
   local seen = recipe.id and ES.db and ES.db.trainerFees and ES.db.trainerFees[recipe.id]
   if seen then
     -- El nivel leído del instructor nunca por debajo del de los datos del juego: uno
@@ -1040,12 +1166,15 @@ function Planner.SaleAdvice(d)
       a.ah = d.sell
     elseif s.verdict ~= "avoid" then
       a.ah = math.min(d.sell, AH_FEW)
+      -- (el resto se guarda para anunciarlo cuando se vendan esas, en varios días; no
+      -- al vendedor: en la AH vale claramente más. Igual que Inventory:List)
+      a.later = d.sell - a.ah
     end
     -- Precio: 1 cobre por debajo de la más barata, o el realista si está inflada
     a.price = ES.Market.ListPrice(sale.fair) or 1
     a.inflated = sale.fair and sale.fair.inflated
   end
-  a.vendor = sale.vendor > 0 and d.sell - a.ah or 0
+  a.vendor = sale.vendor > 0 and d.sell - a.ah - (a.later or 0) or 0
   a.unsold = d.sell - a.ah - a.vendor -- ni AH ni vendedor
   if a.ah > 0 then
     a.kind = "ah"
@@ -1110,6 +1239,16 @@ local DEFAULT_CAST = 3        -- s si el juego no dice el lanzamiento
 local MIN_CAST = 1.5
 local CRAFT_OVERHEAD = 0.5
 local castMemo = {}
+-- Lo que se tarda en fabricar toda la ruta (sus pasos, como la fila del total): para
+-- comparar rutas por tiempo y no solo por oro (la franja de resumen)
+function Planner.RouteSeconds(plan)
+  local secs = 0
+  for _, st in ipairs(plan and plan.steps or {}) do
+    secs = secs + (st.crafts + (st.aheadCrafts or 0)) * Planner.CraftSeconds(st.id)
+  end
+  return secs
+end
+
 function Planner.CraftSeconds(recipeID)
   local s = castMemo[recipeID]
   if s then return s end
@@ -1162,6 +1301,14 @@ function Planner.RouteScore(plan)
     score = score - gain
     -- (con "Menos fabricaciones", cada una pesa lo que tarda: RecipeWeight)
     score = score + RecipeWeight(opts, st.id) * (st.crafts + (st.aheadCrafts or 0))
+    -- En verde, algo de mala suerte (Planner.GreenRisk): las fabricaciones de más que
+    -- podrían hacer falta, a lo que cuesta cada una
+    local risk = 0
+    for s = st.from, st.to - 1 do
+      local p = plan.pointChance and plan.pointChance[s]
+      risk = risk + Planner.GreenRisk(st.recipe and st.recipe.t, s, p)
+    end
+    if risk > 0 then score = score + risk * (math.max(0, st.unitCost) + RecipeWeight(opts, st.id)) end
   end
   for _, c in ipairs(plan.crafted or {}) do crafts = crafts + c.quantity end
   score = score + CW * crafts + GPS_STEP_COST * math.max(0, #plan.steps - 1)
@@ -1227,6 +1374,9 @@ local function PointCost(ctx, rc, s)
         if net < 0 and crafts > PROFIT_FULL_CRAFTS then
           net = net * PROFIT_FULL_CRAFTS / crafts + CRAFT_COST * (crafts - PROFIT_FULL_CRAFTS)
         end
+        -- En verde, algo de mala suerte (como en Plan: Planner.GreenRisk)
+        local risk = Planner.GreenRisk(rc.r.t, s, chance)
+        if risk > 0 then net, crafts = net + cost / crafts * risk, crafts + risk end
         v = { net / (1 + g), crafts / (1 + g) }
       end
     end
@@ -2210,6 +2360,9 @@ function Planner:Plan(data, opts)
             end
             -- Coste simbólico de cada fabricación (solo al elegir; ver Plan)
             local score = net + (opts.craftCost or 0) * crafts
+            -- En verde, algo de mala suerte (solo al elegir: Planner.GreenRisk)
+            local risk = Planner.GreenRisk(r.t, s, chance)
+            if risk > 0 then score = score + (cost / crafts + (opts.craftCost or 0)) * risk end
             local span = math.max(1, math.min(r.t[4], opts.to) - s)
             local feeSpan
             if inf.learnCost > 0 and not learned[id] then
@@ -2479,8 +2632,11 @@ function Planner:Plan(data, opts)
   end
   table.sort(plan.shopping, function(a, b) return a.total > b.total end)
 
+  -- quantity: las que hay que FABRICAR (lo de tus bolsas ya está descontado); owned:
+  -- las que la ruta saca de tus bolsas. Lo que gasta la ruta es la suma (Planner.CraftedTotal)
   for itemID, c in pairs(craftedQty) do
-    plan.crafted[#plan.crafted + 1] = { itemID = itemID, quantity = math.ceil(c.qty - 0.001), recipe = data.recipes[c.recipe], from = c.from }
+    plan.crafted[#plan.crafted + 1] = { itemID = itemID, quantity = math.ceil(c.qty - 0.001), recipe = data.recipes[c.recipe], from = c.from,
+      owned = ownedQty[itemID] and math.ceil(ownedQty[itemID] - 0.001) or nil }
   end
   -- Un paso que empieza gastando lo fabricado antes (la pólvora del paso anterior) y a
   -- mitad necesita fabricar más: el jugador lo tiene que tener ANTES de empezar el

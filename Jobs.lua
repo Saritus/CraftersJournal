@@ -101,6 +101,16 @@ end
 
 function Jobs.Resume() Schedule() end
 
+-- Descarta los trabajos cuyo hueco empieza por `prefix` ("plan:"): sus resultados ya no
+-- le sirven a nadie (rutas de antes de cambiar de idioma o de un escaneo nuevo). Si no,
+-- se calculaban enteras delante de la que esperas: al cambiar de idioma, la ruta se
+-- quedaba en "Calculando la ruta… 0%" mientras acababan las de la ventana anterior
+function Jobs.Cancel(prefix)
+  for i = #queue, 1, -1 do
+    if queue[i].key:sub(1, #prefix) == prefix then table.remove(queue, i) end
+  end
+end
+
 function Jobs.Busy(key)
   for _, job in ipairs(queue) do
     if job.key == key then return true end

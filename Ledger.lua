@@ -3,7 +3,7 @@ local L = ES.L
 
 -- Lo que el addon lee del juego al comprar, vender y entrenar (sin apuntar dinero:
 -- el gasto real de la ruta se quitó porque se apuntaba mal con varias rutas):
---   (lo comprado en la AH no se sigue hasta el buzón: "tienes" son solo tus bolsas)
+--   AH: lo comprado cuenta ya, de camino al buzón (Ledger.OnWay, se borra solo)
 --   instructor: el precio real de cada receta (Ledger:ReadTrainer, Planner.Fee)
 --   vendedor: qué vende y a cuánto (la ventana de compra de VendorUI.lua)
 -- Vender al vendedor y anunciar en la AH desde la vista Profit: siempre con un
@@ -167,19 +167,26 @@ function Ledger:CleanTrainerFees()
   return removed
 end
 
+-- Forever (cliente moderno) pide true/false ("Missing on/off parameter" con 1/0: no
+-- se leía nunca la lista entera); el clásico, 1/0
+local function SetFilter(f, on)
+  if not pcall(SetTrainerServiceTypeFilter, f, on) then SetTrainerServiceTypeFilter(f, on and 1 or 0) end
+end
+
 function Ledger:ReadAllTrainerServices()
   if not (GetTrainerServiceTypeFilter and SetTrainerServiceTypeFilter) then return self:ReadTrainer() end
   local hidden = {}
   for _, f in ipairs(FILTERS) do
-    if not GetTrainerServiceTypeFilter(f) then
+    local shown = GetTrainerServiceTypeFilter(f)
+    if not shown or shown == 0 then
       hidden[#hidden + 1] = f
-      SetTrainerServiceTypeFilter(f, 1)
+      SetFilter(f, true)
     end
   end
   self.fullList = true -- (la lista entera: lo que no sale, este instructor no lo enseña)
   local ok, changed = pcall(self.ReadTrainer, self)
   self.fullList = nil
-  for _, f in ipairs(hidden) do SetTrainerServiceTypeFilter(f, 0) end
+  for _, f in ipairs(hidden) do SetFilter(f, false) end
   if not ok then error(changed, 0) end
   return changed
 end
@@ -294,10 +301,133 @@ function Ledger:ReadTrainer()
     for key in pairs(changedProfs) do
       if ES.InvalidatePlan then ES:InvalidatePlan(key) end
       if ES.lockedPlans then ES.lockedPlans[key] = nil end
+      -- La ruta fijada, rehecha con lo que enseña de verdad el instructor, ya no sale
+      -- (una receta suya a un nivel o rango que no toca): se suelta y se calcula otra
+      -- desde tu nivel, en vez de quedarse vacía (el asistente se quedaba sin pasos)
+      local lock = ES.RouteLock and ES:RouteLock(key)
+      if lock and not lock.completed and ES.LockedPlan then
+        local okPlan, plan = pcall(ES.LockedPlan, ES, key)
+        if okPlan and plan and #plan.steps == 0 then
+          ES:StopRoute(key)
+          ES:Print(string.format(L["Tu ruta de %s ya no se puede seguir con lo que enseña este instructor: se calcula otra desde tu nivel."],
+            ES:ProfLabel(key)))
+        end
+      end
     end
     if ES.RefreshProfessionPages then ES:RefreshProfessionPages() end
   end
   return changed
+end
+
+---------------------------------------------------------------------------
+-- Aprender en el instructor abierto, desde la ruta (clic en el paso del asistente o
+-- su fila): lo que toca y lo de "aprende también". Solo con tu clic y solo lo que está
+-- disponible (tu nivel ya llega). targets = { { recipeID = id } | { rank = cap } }
+---------------------------------------------------------------------------
+local RANK_WORDS = { [150] = { "Journeyman" }, [225] = { "Expert" }, [300] = { "Artisan" }, [375] = { "Master" } }
+
+function Ledger.TrainerOpen()
+  return Ledger.trainerOpen and GetNumTrainerServices and (GetNumTrainerServices() or 0) > 0 or false
+end
+
+-- Índice del servicio del instructor abierto para `target`, o nil. No se exige que el
+-- juego lo marque "available" (en Forever no lo encontraba: captura del 2026-11-17,
+-- Elixir of Wisdom disponible y "no lo enseña"): solo se descarta lo ya aprendido, lo
+-- que aún no te llega y las cabeceras. Sin saber de qué profesión es el instructor,
+-- se busca en todas (como al leer sus precios)
+local SKIP_KINDS = { header = true, used = true, unavailable = true }
+
+-- La profesión misma ("Apprentice Tailoring"): por su hechizo (el del enlace) o por el
+-- nombre (Apprentice, o el nombre de la profesión en el idioma del cliente). Devuelve
+-- el índice y su tipo (unavailable: ya tienes dos profesiones principales)
+function Ledger.ProfessionService(profKey)
+  if not Ledger.TrainerOpen() then return nil end
+  local spell = PROF_SPELLS[profKey]
+  local profName = spell and SpellName(spell)
+  for i = 1, GetNumTrainerServices() or 0 do
+    local name, _, kind = GetTrainerServiceInfo(i)
+    if kind ~= "header" and kind ~= "used" and name then
+      local link = GetTrainerServiceItemLink and GetTrainerServiceItemLink(i)
+      local id = link and tonumber(link:match("spell:(%d+)"))
+      if (spell and id == spell) or name:find("Apprentice", 1, true)
+        or (profName and profName ~= "" and name:find(profName, 1, true)) then
+        return i, kind
+      end
+    end
+  end
+end
+
+function Ledger.TrainerService(target, rankName)
+  if not Ledger.TrainerOpen() then return nil end
+  if target.profession then
+    local i, kind = Ledger.ProfessionService(target.profession)
+    if i and not SKIP_KINDS[kind] then return i end
+    return nil
+  end
+  local prof = TrainerProfession()
+  local profs = {}
+  if prof and ES.Data[prof] and ES.Data[prof].recipes then
+    profs[1] = prof
+  else
+    for _, p in ipairs(ES.PROFESSIONS or {}) do
+      if ES.Data[p.key] and ES.Data[p.key].recipes then profs[#profs + 1] = p.key end
+    end
+  end
+  for i = 1, GetNumTrainerServices() or 0 do
+    local name, _, kind = GetTrainerServiceInfo(i)
+    if not SKIP_KINDS[kind] then
+      if target.recipeID then
+        if #profs > 0 and ServiceRecipe(i, profs, false) == target.recipeID then return i end
+      elseif target.rank and name then
+        local words = { rankName }
+        for _, w in ipairs(RANK_WORDS[target.rank] or {}) do words[#words + 1] = w end
+        for _, w in ipairs(words) do
+          if w and w ~= "" and name:find(w, 1, true) then return i end
+        end
+      end
+    end
+  end
+end
+
+-- Aprende en el instructor abierto lo que haya de `targets`, de uno en uno (el
+-- servidor ignora las compras muy seguidas). Devuelve cuántos encontró
+function Ledger.LearnAtTrainer(targets)
+  local queue = {}
+  for _, t in ipairs(targets) do
+    if Ledger.TrainerService(t, t.rankName) then queue[#queue + 1] = t end
+  end
+  if #queue == 0 then
+    -- La profesión está en la lista pero no se puede aprender: ya tienes dos principales
+    for _, t in ipairs(targets) do
+      local i, kind
+      if t.profession then i, kind = Ledger.ProfessionService(t.profession) end
+      if i and kind == "unavailable" then
+        ES:Print(string.format(L["No puedes aprender %s: ya tienes dos profesiones principales. Olvida una primero (desde su ventana de profesión)."],
+          ES:ProfLabel(t.profession)))
+        return 0
+      end
+    end
+    ES:Print(L["Este instructor no lo enseña (o aún no te llega el nivel)."])
+    -- (para diagnosticar en el juego: lo que buscaba y lo que el instructor ofrece)
+    local want = {}
+    for _, t in ipairs(targets) do want[#want + 1] = tostring(t.recipeID or ("rango " .. tostring(t.rank))) end
+    Log("instructor: no encuentra " .. table.concat(want, ", ") .. " · profesión " .. tostring(TrainerProfession()))
+    for i = 1, math.min(GetNumTrainerServices and GetNumTrainerServices() or 0, 40) do
+      local name, sub, kind = GetTrainerServiceInfo(i)
+      Log(string.format("  %d %s | %s | %s | %s", i, tostring(name), tostring(sub), tostring(kind),
+        tostring(GetTrainerServiceItemLink and GetTrainerServiceItemLink(i))))
+    end
+    return 0
+  end
+  local function Next(k)
+    local t = queue[k]
+    if not t or not Ledger.TrainerOpen() then return end
+    local i = Ledger.TrainerService(t, t.rankName) -- (los índices cambian al aprender)
+    if i and BuyTrainerService then BuyTrainerService(i) end
+    if queue[k + 1] and C_Timer then C_Timer.After(0.4, function() Next(k + 1) end) end
+  end
+  Next(1)
+  return #queue
 end
 
 ---------------------------------------------------------------------------
@@ -341,9 +471,10 @@ Ledger.MerchantInfo = MerchantInfo
 
 do
   local f = CreateFrame("Frame")
-  for _, e in ipairs({ "TRAINER_SHOW", "TRAINER_UPDATE", "PLAYER_ENTERING_WORLD",
+  for _, e in ipairs({ "TRAINER_SHOW", "TRAINER_UPDATE", "TRAINER_CLOSED", "PLAYER_ENTERING_WORLD",
     "MERCHANT_SHOW", "MERCHANT_CLOSED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
-    "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_AUCTION_CREATED", "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE" }) do
+    "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_AUCTION_CREATED", "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE",
+    "PLAYER_MONEY", "COMMODITY_PURCHASE_SUCCEEDED", "COMMODITY_PURCHASE_FAILED" }) do
     ES.SafeRegister(f, e)
   end
   f:SetScript("OnEvent", function(_, event, ...)
@@ -366,7 +497,31 @@ do
         end
       end
     end
-    if event == "AUCTION_HOUSE_AUCTION_CREATED" or event == "CHAT_MSG_SYSTEM" or event == "UI_ERROR_MESSAGE" then return end
+    -- Compra ganada en la AH: cuenta ya, aunque esté en el correo (Ledger.OnWay). Por
+    -- varias vías (la que funcione en cada cliente y con cada addon de la AH); la misma
+    -- compra solo cuenta una vez (AddOnWay)
+    if event == "CHAT_MSG_SYSTEM" then
+      Ledger.OnChatLine((...), "sistema")
+      return
+    end
+    -- Compra al precio de compra inmediata (AH clásica, PlaceAuctionBid): te cobran
+    if event == "PLAYER_MONEY" then
+      Ledger.ConfirmBid()
+      return
+    end
+    -- AH moderna: compra de materiales confirmada
+    if event == "COMMODITY_PURCHASE_SUCCEEDED" or event == "COMMODITY_PURCHASE_FAILED" then
+      local p = Ledger.pendingCommodity
+      Ledger.pendingCommodity = nil
+      if p and event == "COMMODITY_PURCHASE_SUCCEEDED" and Ledger.AddOnWay(p.itemID, p.n, "AH moderna") then
+        Ledger.RefreshOnWay()
+      end
+      return
+    end
+    if event == "UI_ERROR_MESSAGE" and Ledger.pendingBid and Ledger.IsAuctionError(select(2, ...)) then
+      Ledger.pendingBid = nil -- (la compra no se hizo)
+    end
+    if event == "AUCTION_HOUSE_AUCTION_CREATED" or event == "UI_ERROR_MESSAGE" then return end
     if event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then
       -- Se pulsó con la AH ocupada: avisa de que ya se puede (anunciar necesita un clic)
       local b = Ledger.ahBusy
@@ -380,9 +535,15 @@ do
     if event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED" or event == "AUCTION_HOUSE_SHOW" or event == "AUCTION_HOUSE_CLOSED" then
       -- La vista Profit cambia sus clics (vender al vendedor, anunciar en la AH)
       if ES.RefreshAfterBags then ES:RefreshAfterBags() end
+    elseif event == "TRAINER_CLOSED" then
+      Ledger.trainerOpen = nil
+      if ES.Assistant and ES.Assistant.Refresh then ES.Assistant.Refresh() end -- (el clic vuelve a llevarte)
     elseif event == "TRAINER_SHOW" or event == "TRAINER_UPDATE" then
+      Ledger.trainerOpen = true
       local ok, err = pcall(event == "TRAINER_SHOW" and Ledger.ReadAllTrainerServices or Ledger.ReadTrainer, Ledger)
       if not ok then Log("instructor: error leyendo precios: " .. tostring(err)) end
+      -- (el paso de entrenar del asistente pasa a aprender con un clic)
+      if ES.Assistant and ES.Assistant.Refresh then ES.Assistant.Refresh() end
     elseif event == "PLAYER_ENTERING_WORLD" then
       -- Compras de la AH "en el correo" de versiones anteriores: ya no se cuentan
       ES.db.mailBought, ES.db.ahOnWay = nil, nil
@@ -397,15 +558,61 @@ function Ledger:MerchantOpen()
   return MerchantFrame and MerchantFrame:IsShown() and true or false
 end
 
--- Vende hasta `n` unidades al vendedor abierto, pilas enteras que quepan en `n`.
--- Devuelve cuántas vendió.
+-- Cola de ventas: una casilla cada SELL_GAP. Todas en el mismo instante (17 Linen Belt,
+-- que no se apilan: 17 ventas de golpe) el servidor se saltaba unas cuantas y había que
+-- pulsar Vender todo varias veces (Discord). Antes de cada una se mira que el vendedor
+-- siga abierto y la casilla tenga aún ese objeto; si está bloqueada (la venta anterior
+-- aún no ha terminado), se espera
+local SELL_GAP = 0.15
+local SELL_MAX_WAIT = 10 -- veces que se espera a una casilla bloqueada antes de dejarla
+Ledger.sellQueue = {}
+
+local function SlotLocked(bag, slot)
+  if C_Container and C_Container.GetContainerItemInfo then
+    local info = C_Container.GetContainerItemInfo(bag, slot)
+    return info and info.isLocked
+  end
+  if GetContainerItemInfo then return select(3, GetContainerItemInfo(bag, slot)) and true or false end
+end
+
+local function PumpSells()
+  local q = Ledger.sellQueue
+  local s = q[1]
+  if not s or not Ledger:MerchantOpen() then
+    Ledger.sellQueue, Ledger.selling = {}, nil
+    return
+  end
+  if ContainerItemID(s.bag, s.slot) ~= s.itemID then
+    table.remove(q, 1) -- (ya no está: vendido, movido o usado)
+  elseif SlotLocked(s.bag, s.slot) and (s.waits or 0) < SELL_MAX_WAIT then
+    s.waits = (s.waits or 0) + 1
+  else
+    UseItem(s.bag, s.slot)
+    table.remove(q, 1)
+  end
+  if q[1] then C_Timer.After(SELL_GAP, PumpSells) else Ledger.selling = nil end
+end
+
+local function QueueSell(bag, slot, itemID)
+  local q = Ledger.sellQueue
+  for _, s in ipairs(q) do if s.bag == bag and s.slot == slot then return end end
+  q[#q + 1] = { bag = bag, slot = slot, itemID = itemID }
+  if not Ledger.selling then
+    Ledger.selling = true
+    PumpSells()
+  end
+end
+Ledger.QueueSell = QueueSell -- (pruebas)
+
+-- Vende hasta `n` unidades al vendedor abierto, pilas enteras que quepan en `n`
+-- (en cola: ver arriba). Devuelve cuántas va a vender.
 function Ledger:SellToVendor(itemID, n)
   if not self:MerchantOpen() or not CC("UseContainerItem") or n <= 0 then return 0 end
   local sold = 0
   local slots = Slots(itemID)
   for _, s in ipairs(slots) do
     if sold + s.count <= n then
-      UseItem(s.bag, s.slot)
+      QueueSell(s.bag, s.slot, itemID)
       sold = sold + s.count
       s.used = true
     end
@@ -423,7 +630,7 @@ function Ledger:SellToVendor(itemID, n)
       pickup(bag, slot)
       -- (el juego tarda un momento en dejar la pila nueva en su casilla)
       C_Timer.After(0.5, function()
-        if self:MerchantOpen() and ContainerItemID(bag, slot) == itemID then UseItem(bag, slot) end
+        if self:MerchantOpen() and ContainerItemID(bag, slot) == itemID then QueueSell(bag, slot, itemID) end
       end)
       sold = n
     elseif from and not bag then
@@ -442,15 +649,222 @@ function Ledger.PostPrice(unit)
 end
 
 ---------------------------------------------------------------------------
--- Lo que tienes para la lista de compra: lo que llevas en las bolsas. No se mira el
--- correo: lo comprado en la AH cuenta cuando lo recoges. Antes se apuntaba lo comprado
--- "de camino" (ES.db.ahOnWay) y se descontaba al recogerlo, pero si se perdía un
--- descuento se quedaba pegado (Discord: "48 en el correo" sin nada en el buzón): se
--- quitó, y lo guardado se borra al entrar (ver arriba, PLAYER_ENTERING_WORLD)
+-- Lo que tienes para la lista de compra y las filas de compra del asistente: lo que
+-- llevas en las bolsas y lo comprado en la AH que viene por correo ("de camino"). Sin
+-- eso, tras comprar había que ir al buzón antes de que contara (con varios materiales,
+-- un viaje por compra).
+-- La versión anterior (ES.db.ahOnWay) se apuntaba al comprar y se descontaba al
+-- recogerlo; si se perdía un descuento se quedaba pegado (Discord: "48 en el correo"
+-- sin nada en el buzón). Esta no depende de un descuento, se borra sola:
+--   · lo que llega a las bolsas desde la compra deja de contar como "de camino"
+--     (base = lo mínimo que había en las bolsas desde entonces: gastar no lo confunde);
+--   · pasado ONWAY_TTL, fuera.
+-- El correo no se lee (daba problemas, y lo que llega puede venir de otro sitio: un
+-- intercambio, un alter): solo la compra y tus bolsas.
+-- Por personaje (ES.charData.ahOnWay = { { itemID, n, base, t } })
 ---------------------------------------------------------------------------
-function ES:HaveForShopping(itemID)
-  return self:ItemCount(itemID) or 0
+local ONWAY_TTL = 2 * 3600
+
+local function OnWayList()
+  local c = ES.charData
+  if not c then return {} end
+  c.ahOnWay = c.ahOnWay or {}
+  return c.ahOnWay
 end
+
+-- Quita lo caducado y lo que ya llegó; devuelve las unidades de `itemID` aún de camino
+function Ledger.OnWay(itemID)
+  local list, now, left = OnWayList(), time(), 0
+  for i = #list, 1, -1 do
+    local e = list[i]
+    if type(e) ~= "table" or not e.itemID or now - (e.t or 0) > ONWAY_TTL then
+      table.remove(list, i)
+    else
+      local bags = BagCount(e.itemID)
+      if bags < (e.base or 0) then e.base = bags end -- (gastaste de lo que tenías)
+      local credit = (e.n or 0) - math.max(0, bags - (e.base or 0))
+      if credit <= 0 then
+        table.remove(list, i)
+      elseif e.itemID == itemID then
+        left = left + credit
+      end
+    end
+  end
+  return left
+end
+
+-- Todo lo que sigue de camino: { [itemID] = unidades } (para el paso "Recoge el correo")
+function Ledger.OnWayItems()
+  Ledger.OnWay(nil) -- (limpia lo caducado y lo que ya llegó)
+  local out = {}
+  for _, e in ipairs(OnWayList()) do
+    if not out[e.itemID] then out[e.itemID] = Ledger.OnWay(e.itemID) end -- (suma todas sus compras)
+  end
+  return out
+end
+
+local function Now() return GetTime and GetTime() or time() end
+
+-- Compra en la AH confirmada: N unidades de camino al buzón. La misma compra llega por
+-- varias vías (el mensaje del juego, el que escribe un addon como TSM, la API de la AH):
+-- si otra vía ya la apuntó hace poco, no cuenta otra vez (si dice más unidades, solo
+-- la diferencia: el mensaje del juego a veces no lleva la cantidad). La misma vía
+-- repetida sí es otra compra. Devuelve true si apuntó algo
+local DUP_WINDOW = 10
+local recentBuys = {} -- [itemID] = { t, n, via = { [vía] = true } }
+function Ledger.AddOnWay(itemID, n, via)
+  if not (itemID and n and n > 0) then return false end
+  via = via or "?"
+  local now = Now()
+  local r = recentBuys[itemID]
+  local add = n
+  if r and now - r.t < DUP_WINDOW and not r.via[via] then
+    r.via[via] = true
+    add = n - r.n
+    if add <= 0 then
+      Log(string.format("AH: %d× %d también por %s (ya contado)", n, itemID, via))
+      return false
+    end
+    r.n = n
+  else
+    recentBuys[itemID] = { t = now, n = n, via = { [via] = true } }
+  end
+  local list = OnWayList()
+  list[#list + 1] = { itemID = itemID, n = add, base = BagCount(itemID), t = time() }
+  Log(string.format("AH: comprado %d× %d por %s (de camino al buzón)", add, itemID, via))
+  -- Se dice en el chat: así se ve que la compra cuenta (y si algún día no sale, que no
+  -- se detectó: queda Saltar en el asistente). Sin el texto del mensaje de la AH, que
+  -- si no esta línea se leería otra vez como compra
+  local name = (GetItemInfo and GetItemInfo(itemID)) or (ES.DataItemName and ES:DataItemName(itemID)) or tostring(itemID)
+  if ES.Print then ES:Print(string.format(L["Compra detectada: %s ×%d. Cuenta ya para la ruta y la lista de compra."], name, add)) end
+  return true
+end
+
+-- Una línea de chat: ¿dice que ganaste una subasta? (el mensaje del juego o el que
+-- escribe un addon de la AH en su lugar, como TSM: "You won an auction for [x]x50 for
+-- 35s 00c"). La misma línea en varias ventanas de chat cuenta una vez
+local lastLine, lastLineAt
+function Ledger.OnChatLine(text, via)
+  if type(text) ~= "string" then return end
+  local itemID, n = Ledger.ParseAuctionWon(text)
+  if not itemID then return end
+  local now = Now()
+  if text == lastLine and now - (lastLineAt or -99) < 2 then return end
+  lastLine, lastLineAt = text, now
+  if Ledger.AddOnWay(itemID, n, via) then Ledger.RefreshOnWay() end
+end
+
+-- AH clásica: comprar a precio de compra inmediata (PlaceAuctionBid con la puja igual
+-- o mayor que ese precio) se gana al momento y te cobran: al bajar tu dinero, cuenta
+function Ledger.OnPlaceBid(listType, index, bid)
+  if not GetAuctionItemInfo then return end
+  local info = { GetAuctionItemInfo(listType, index) }
+  local count, buyout, itemID = info[3], info[10], info[17]
+  if not (itemID and buyout and buyout > 0 and bid and bid >= buyout) then return end
+  Ledger.pendingBid = { itemID = itemID, n = count or 1, money = GetMoney and GetMoney() or 0, t = Now() }
+end
+
+function Ledger.ConfirmBid()
+  local p = Ledger.pendingBid
+  if not p then return end
+  Ledger.pendingBid = nil
+  if Now() - p.t > 5 or not GetMoney or GetMoney() >= p.money then return end
+  if Ledger.AddOnWay(p.itemID, p.n, "compra inmediata") then Ledger.RefreshOnWay() end
+end
+
+-- Se enganchan al cargar (antes que TSM y demás, que se cargan después por orden
+-- alfabético y guardan su propia copia de la función)
+if hooksecurefunc then
+  if PlaceAuctionBid then
+    hooksecurefunc("PlaceAuctionBid", function(...) pcall(Ledger.OnPlaceBid, ...) end)
+  end
+  if C_AuctionHouse and C_AuctionHouse.ConfirmCommoditiesPurchase then
+    hooksecurefunc(C_AuctionHouse, "ConfirmCommoditiesPurchase", function(itemID, n)
+      Ledger.pendingCommodity = itemID and { itemID = itemID, n = n or 1 } or nil
+    end)
+  end
+  -- Lo que se escribe en las ventanas de chat (por si un addon cambia el mensaje del
+  -- juego por el suyo, o lo escribe él)
+  for i = 1, NUM_CHAT_WINDOWS or 10 do
+    local cf = _G["ChatFrame" .. i]
+    if cf and cf.AddMessage then
+      hooksecurefunc(cf, "AddMessage", function(_, text) pcall(Ledger.OnChatLine, text, "chat") end)
+    end
+  end
+end
+
+-- Objeto por su nombre (en el idioma del cliente o en inglés): el del juego si lo tiene
+-- en caché, si no, los nombres de los datos del addon
+local nameToID
+local function ItemIDByName(name)
+  if not name or name == "" then return nil end
+  local link = GetItemInfo and select(2, GetItemInfo(name))
+  local id = link and tonumber(link:match("item:(%d+)"))
+  if id then return id end
+  if not nameToID then
+    nameToID = {}
+    for itemID, n in pairs(ES.Data.ItemNames or {}) do nameToID[n:lower()] = itemID end
+    local set = ES.NamesFor and ES.DefaultLanguage and ES.NamesFor(ES.DefaultLanguage())
+    for itemID, n in pairs(set and set.items or {}) do nameToID[n:lower()] = itemID end
+  end
+  if nameToID[name:lower()] then return nameToID[name:lower()] end
+  -- Los pergaminos de receta ("Recipe: Rage Potion"): el mensaje del juego no lleva
+  -- enlace y sus nombres no están en los datos; la receta sin el prefijo de su
+  -- profesión ("Recipe: ", "Pattern: "...)
+  local bare = name:match("^[^:]+:%s*(.+)$")
+  if bare then
+    bare = bare:lower()
+    for _, p in ipairs(ES.PROFESSIONS or {}) do
+      for _, r in pairs(ES.Data[p.key] and ES.Data[p.key].recipes or {}) do
+        -- (r.name va en el idioma del addon; el mensaje, en el del cliente: también en inglés)
+        if r.scroll and ((r.nameEN and r.nameEN:lower() == bare) or (r.name and r.name:lower() == bare)) then return r.scroll end
+      end
+    end
+  end
+end
+Ledger.ItemIDByName = ItemIDByName -- (para pruebas)
+
+-- "You won an auction for [Silverleaf]x21" (ERR_AUCTION_WON_S, en el idioma del
+-- cliente): objeto y cuántos, o nil. Forever añade el precio detrás ("...x50 for
+-- 10s 50c"): solo cuenta el principio fijo del mensaje, y lo que sigue al objeto y
+-- su "xN" se ignora. El objeto, por su enlace o por su nombre
+function Ledger.ParseAuctionWon(message)
+  if type(message) ~= "string" then return nil end
+  -- Sin colores (otros addons de chat los añaden; el enlace del objeto sigue: |H...|h)
+  -- y el principio fijo en cualquier parte (por si algo va delante, como una hora)
+  message = message:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+  local fmt = type(ERR_AUCTION_WON_S) == "string" and ERR_AUCTION_WON_S or "You won an auction for %s"
+  local prefix = fmt:match("^(.-)%%s")
+  if not prefix or prefix == "" then return nil end
+  local at = message:find(prefix, 1, true)
+  if not at then return nil end
+  local what = message:sub(at + #prefix)
+  local itemID, rest = what:match("|Hitem:(%d+)[^|]*|h.-|h|?r?(.*)$")
+  local name
+  itemID = tonumber(itemID)
+  if not itemID then
+    name, rest = what:match("^%[(.-)%](.*)$")
+    if not name then name, rest = what:match("^(.-)%s*([xX×]%s*%d+.*)$") end
+    if not name then name, rest = what, "" end
+    name = name:gsub("%s+$", "")
+    itemID = ItemIDByName(name)
+  end
+  local count = tonumber((rest or ""):match("^%s*[xX×]%s*(%d+)")) or 1
+  -- (para diagnosticar en el juego: /cj, Informar de un error, lleva este registro)
+  if not itemID and ES.db then Log("AH: compra sin reconocer el objeto: " .. what) end
+  return itemID, count
+end
+
+function ES:HaveForShopping(itemID)
+  return (self:ItemCount(itemID) or 0) + Ledger.OnWay(itemID)
+end
+
+local function RefreshOnWay()
+  if ES.RefreshAfterBags then ES:RefreshAfterBags() end
+  if ES.RenderShopping then ES:RenderShopping() end
+  if ES.Assistant and ES.Assistant.Refresh then ES.Assistant.Refresh() end
+end
+Ledger.RefreshOnWay = RefreshOnWay
 
 -- AH ocupada: cada cuánto se repite el aviso y cuándo se olvida un intento viejo (s)
 local AH_BUSY_REPRINT, AH_BUSY_RESET = 10, 30

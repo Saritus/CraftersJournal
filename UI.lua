@@ -248,6 +248,7 @@ local function CreateMainFrame()
     ES:RefreshScanButtons()
     ES:SelectPage(self.openPage or ES.sessionPage or "home")
     self.openPage = nil
+    ES:KeepTabsOnScreen() -- (sin pestañas a la vista no se puede cambiar de página)
   end)
 
   main = f
@@ -399,6 +400,25 @@ function ES:CreateSideTabs(f)
     end)
     tab:SetScript("OnLeave", function() GameTooltip:Hide() end)
     f.tabs[#f.tabs + 1] = tab
+  end
+  -- Las pestañas cuelgan fuera del marco, a la derecha, y SetClampedToScreen solo
+  -- mira el marco: pegada al borde derecho (junto a la AH, o arrastrada) se quedaban
+  -- fuera de la pantalla y no había forma de salir de la página (informe de la 0.60,
+  -- atascado en la Lista de compra). Que cuenten para mantenerla dentro
+  if f.SetClampRectInsets then f:SetClampRectInsets(0, TAB_SIZE, 0, 0) end
+end
+
+-- Por si acaso (escala, resolución que cambia, marco colocado antes de ajustarse):
+-- si la primera pestaña sale por la derecha de la pantalla, la ventana vuelve al centro
+function ES:KeepTabsOnScreen()
+  local tab = main and main.tabs and main.tabs[1]
+  local right = tab and tab:GetRight()
+  local width = GetScreenWidth and GetScreenWidth()
+  if type(right) ~= "number" or type(width) ~= "number" then return end
+  local ratio = tab:GetEffectiveScale() / UIParent:GetEffectiveScale()
+  if right * ratio > width + 1 then
+    main:ClearAllPoints()
+    main:SetPoint("CENTER")
   end
 end
 
@@ -601,7 +621,9 @@ function ES:RefreshScanButtons()
     self:UpdateLastScan()
   end
   if ahButton then
-    ahButton:SetEnabled(enabled)
+    -- Siempre pulsable con la AH abierta: abre el addon aunque no se pueda escanear
+    -- (CurseForge: con la cuenta atrás en gris no había forma de abrirlo desde la AH)
+    ahButton:SetEnabled(self:IsAuctionHouseOpen())
     ahButton:SetText(progress and ("Crafter's Journal: " .. progress) or L["Crafter's Journal: Escanear"])
   end
   self:UpdatePostStatus()
@@ -678,14 +700,22 @@ function ES:OnAuctionHouseShow()
     ahButton = CreateFrame("Button", "CraftersJournalAHButton", ahFrame, "UIPanelButtonTemplate")
     ahButton:SetSize(180, 24)
     ahButton:SetPoint("BOTTOMRIGHT", ahFrame, "TOPRIGHT", 0, 2)
+    -- Abre el addon siempre; escanea solo si se puede (sin escaneo en curso ni el
+    -- límite de 15 min del servidor). Si no, se abre con los últimos precios
     ahButton:SetScript("OnClick", function()
       ES:ShowMainFrame()
-      ES.Scanner:Start()
+      if not ES.Scanner:IsBusy() and ES.Scanner:SecondsUntilNextScan() == 0 then
+        ES.Scanner:Start()
+      end
     end)
     ahButton:SetScript("OnEnter", function(self)
       GameTooltip:SetOwner(self, "ANCHOR_TOP")
       GameTooltip:AddLine("Crafter's Journal")
       GameTooltip:AddLine(L["Descarga todas las subastas y muestra el análisis."], 1, 1, 1, true)
+      local wait = not ES.Scanner:IsBusy() and ES.Scanner:SecondsUntilNextScan() or 0
+      if wait > 0 then
+        GameTooltip:AddLine(string.format(L["El servidor solo permite un escaneo completo cada 15 min: podrás volver a escanear en %s."], ES.Countdown(wait)), 1, 0.6, 0.2, true)
+      end
       GameTooltip:Show()
     end)
     ahButton:SetScript("OnLeave", function() GameTooltip:Hide() end)

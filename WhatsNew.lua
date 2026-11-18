@@ -21,6 +21,23 @@ local L = ES.L
 -- versión anterior (si te saltaste versiones, todo sale junto: ver ShowWhatsNew)
 ES.WHATS_NEW = {
   {
+    version = "0.61.0",
+    items = {
+      { icon = "Interface\\Icons\\INV_Misc_Spyglass_02", top = true, title = "Nuevo: asistente de ruta (beta)",
+        text = "Con una ruta empezada, un banner pequeño te dice qué toca: fabricar, comprar en la AH o al vendedor, recoger el correo o entrenar. Un clic lo hace o te lleva. Se abre con el botón junto a Dejar ruta o con /cj mini." },
+      { icon = "Interface\\Icons\\INV_Misc_PocketWatch_01", title = "Cuánto se tarda en fabricar",
+        text = "Cada paso de la ruta dice cuánto tardas en fabricarlo, y la franja de arriba el tiempo de toda la ruta." },
+      { icon = "Interface\\Icons\\INV_Misc_Coin_02", title = "Lo que sacas vendiendo en la AH",
+        text = "Bajo el total de la ruta, \"con AH\" dice lo que te quedaría si vendes lo fabricado como aconseja la vista Profit, en la AH y al vendedor." },
+      { icon = "Interface\\Icons\\INV_Misc_Book_09", title = "Menos verdes en las rutas",
+        text = "La ruta prefiere recetas seguras a tramos largos en verde: menos fabricaciones y menos viajes a comprar, por muy poco oro más." },
+      { icon = "Interface\\Icons\\INV_Misc_Bag_10", title = "Compras por tandas en verde",
+        text = "En las recetas verdes compra por tandas, con algo de margen, y \"esta tanda: N\" dice para cuántas te llega lo que llevas. El tamaño de la tanda se cambia en /cj opciones, Lista de compra." },
+      { icon = "Interface\\Icons\\INV_Misc_Coin_17", title = "Vender, más fácil",
+        text = "Vender todo vende todo de un clic, y lo que no tiene un precio fiable en la AH va al vendedor. Con Ctrl+clic derecho en una fila lo pasas de la AH al vendedor o al revés." },
+    },
+  },
+  {
     version = "0.59.0",
     items = {
       { icon = "Interface\\Icons\\INV_Fabric_Moonrag_01", title = "Enfriamientos en el lote de hoy",

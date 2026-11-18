@@ -233,10 +233,24 @@ function Vendor:Pump()
   C_Timer.After(q.check and 1.0 or BUY_GAP, function() Vendor:Pump() end)
 end
 
+-- Lo que falta de verdad AHORA (`need` unidades en total): con lo que llevas en este
+-- momento, no con lo de cuando se pintó la fila. Un clic sobre una fila aún sin
+-- repintar (justo tras otra compra) compraba otra vez lo mismo
+function Vendor.Missing(itemID, need, batch)
+  local have = (ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID)) + Vendor:Pending(itemID)
+  local left = math.max(0, (need or 0) - have)
+  batch = math.max(batch or 1, 1)
+  return math.ceil(left / batch) * batch
+end
+
 -- Compra `entry` (de Vendor:List): en tandas de como mucho una pila
 function Vendor:Buy(entry)
   -- Ya se está comprando (p. ej. "Comprar todo" y luego un clic en su fila): no dos veces
   for _, q in ipairs(self.queue) do if q.itemID == entry.itemID then return end end
+  if entry.need then
+    entry.qty = math.min(entry.qty, Vendor.Missing(entry.itemID, entry.need, entry.batch))
+    if entry.qty <= 0 then self:Refresh() return end
+  end
   local target = ES:ItemCount(entry.itemID) + entry.qty
   Enqueue(self.queue, entry.itemID, entry.qty, entry.batch)
   self.queue[#self.queue + 1] = { itemID = entry.itemID, check = target, batch = entry.batch }
@@ -254,7 +268,9 @@ function Vendor:BuyExact(items)
     if i and price and price > 0 and gold and avail ~= 0 and (it.quantity or 0) > 0 then
       batch = math.max(batch or 1, 1)
       local qty = math.ceil(it.quantity / batch) * batch
-      bought[#bought + 1] = { itemID = it.itemID, qty = qty, batch = batch, cost = qty / batch * price }
+      -- (con lo que llevas ahora: la fila del asistente puede ser de antes de otra compra)
+      if it.need then qty = math.min(qty, Vendor.Missing(it.itemID, it.need, batch)) end
+      bought[#bought + 1] = qty > 0 and { itemID = it.itemID, qty = qty, batch = batch, cost = qty / batch * price, need = it.need } or nil
       total = total + qty / batch * price
     elseif (it.quantity or 0) > 0 then
       missing[#missing + 1] = it

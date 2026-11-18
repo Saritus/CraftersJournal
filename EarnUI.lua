@@ -60,15 +60,21 @@ local function IdeaTooltip(idea)
     end
     GameTooltip:AddLine(" ")
     local W = { 0.8, 0.8, 0.8, 1, 1, 1 }
+    -- Lo que se cobra es por unidad; si una fabricación da varias, también lo de todas
+    -- (que cuadre con el coste y el beneficio por fabricación)
+    local function Sale(unit)
+      if (e.qty or 1) <= 1 then return ES.Money(unit) end
+      return ES.Money(unit) .. GREY .. " ×" .. e.qty .. " = |r" .. ES.Money(unit * e.qty)
+    end
     GameTooltip:AddDoubleLine(L["Coste por fabricación"], ES.Money(e.cost), unpack(W))
     if idea.sellWhere == "ah" then
       GameTooltip:AddDoubleLine(L["La más barata en la AH"], ES.Money(e.ahMin), unpack(W))
       ES.Market.AddFairToTooltip(e.fair)
       GameTooltip:AddDoubleLine(L["A la venta ahora"], string.format(L["%d subastas, %d uds"], e.listings, e.quantity), unpack(W))
       GameTooltip:AddDoubleLine(string.format(e.fair and e.fair.inflated and L["Te queda al precio de los últimos días (-%d%%, depósito)"]
-        or L["Te queda igualando a la más barata (-%d%%, depósito)"], e.cut * 100), ES.Money(e.ahNet), unpack(W))
+        or L["Te queda igualando a la más barata (-%d%%, depósito)"], e.cut * 100), Sale(e.ahNet), unpack(W))
     else
-      GameTooltip:AddDoubleLine(L["Vendedor te paga"], ES.Money(e.vendor), unpack(W))
+      GameTooltip:AddDoubleLine(L["Vendedor te paga"], Sale(e.vendor), unpack(W))
     end
     GameTooltip:AddDoubleLine(L["Beneficio por fabricación"], GREEN .. "+" .. ES.Money(e.profit) .. "|r", unpack(W))
     if idea.crafts then
@@ -176,6 +182,20 @@ local function HideRecipe(line, id)
   return line
 end
 
+-- Lo de una fabricación entre las unidades que da (Shadow Oil da 2): para las cifras
+-- "/u", junto al precio de la AH, que es de una. Antes salía el coste de una
+-- fabricación como "/u" y parecía vender con pérdida (CurseForge: aceites de Alquimia)
+local function PerUnit(e, copper)
+  return math.floor(copper / math.max(1, e.qty or 1) + 0.5)
+end
+
+-- "5× Shadow Oil (10 uds)": las fabricaciones y, si cada una da varias, las unidades
+local function CraftsTitle(e, crafts, name)
+  local title = string.format("%d× %s", crafts, name)
+  if (e.qty or 1) > 1 then title = title .. GREY .. string.format(L[" (%d uds)"], crafts * e.qty) .. "|r" end
+  return title
+end
+
 local function IdeaLineBase(idea, dim)
   local e = idea.e
   local name, texture = ItemLabel(e.itemID, e.recipe.name)
@@ -183,10 +203,10 @@ local function IdeaLineBase(idea, dim)
     and (string.format(L["AH %s/u (%d a la venta) · %s"], ES.Money(e.ahPrice or e.ahMin), e.quantity, ES.Market.LABELS[idea.verdict])
       .. (e.fair and e.fair.inflated and (ORANGE .. L[" · ahora inflado"] .. "|r") or ""))
     or string.format(L["vendedor %s/u"], ES.Money(e.vendor))
-  local sub = string.format(L["%s · coste %s/u · %s"], ES:ProfLabel(idea.profKey), ES.Money(e.cost), where)
+  local sub = string.format(L["%s · coste %s/u · %s"], ES:ProfLabel(idea.profKey), ES.Money(PerUnit(e, e.cost)), where)
   if dim then
     return { icon = texture or 134400, title = GREY .. (name or e.recipe.name) .. "|r", sub = sub,
-      value = GREY .. "+" .. ES.Money(e.profit) .. "/u|r", item = e.itemID, tooltip = IdeaTooltip(idea) }
+      value = GREY .. "+" .. ES.Money(PerUnit(e, e.profit)) .. "/u|r", item = e.itemID, tooltip = IdeaTooltip(idea) }
   end
   if idea.crafts == 0 then
     -- Ya tienes las que tocan: no hay que fabricar, solo anunciarlas
@@ -223,7 +243,7 @@ local function IdeaLineBase(idea, dim)
       sub = sub .. ORANGE .. string.format(L[" · más de lo recomendado (%d)"], idea.recommended) .. "|r"
     end
   end
-  return { icon = texture or 134400, title = string.format("%d× %s", idea.crafts, name or e.recipe.name), sub = sub,
+  return { icon = texture or 134400, title = CraftsTitle(e, idea.crafts, name or e.recipe.name), sub = sub,
     value = ES.UI.Signed(-idea.profit), item = e.itemID, tooltip = IdeaTooltip(idea), onClick = onClick,
     onRightClick = onRightClick, onStep = onStep }
 end
@@ -532,7 +552,7 @@ function ES:RenderEarn()
       if idea.cooldown then where = where .. L[" · con enfriamiento"] end
       lines[#lines + 1] = HideRecipe({ icon = texture or 134400, title = name or e.recipe.name,
         sub = string.format("%s · %s · %s · %s", ES:ProfLabel(idea.profKey), learn, req, where),
-        value = GREEN .. "+" .. ES.Money(e.profit) .. "/u|r", item = e.itemID, tooltip = IdeaTooltip(idea) }, e.id)
+        value = GREEN .. "+" .. ES.Money(PerUnit(e, e.profit)) .. "/u|r", item = e.itemID, tooltip = IdeaTooltip(idea) }, e.id)
     end
   end
   -- Enfriamientos (transmutaciones...) que sabes

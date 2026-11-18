@@ -38,6 +38,9 @@ local function BagContents()
         it.bound = it.bound or (info and info.isBound) or nil
         it.noValue = it.noValue or (info and info.hasNoValue) or nil
         it.quality = it.quality or (info and info.quality) or nil
+        -- (el enlace trae el nombre aunque el juego aún no tenga el objeto en caché: sin
+        -- él la ventana junto a la AH enseñaba "#4539" hasta que llegaba)
+        it.link = it.link or (info and info.hyperlink) or nil
         items[id] = it
       end
     end
@@ -158,6 +161,42 @@ function Inventory.SetNeverSell(itemID, on)
   if ES.AuctionSell and ES.AuctionSell.Refresh then ES.AuctionSell:Refresh() end
 end
 
+-- Pasado al vendedor (Ctrl+clic derecho en una fila de la AH): aunque en la AH valga
+-- más, prefieres venderlo seguro y sin esperar. ES.db.forceVendor[itemID] = true
+function Inventory.ForceVendor(itemID)
+  return ES.db.forceVendor ~= nil and ES.db.forceVendor[itemID] == true
+end
+
+local function RefreshSellViews()
+  if ES.RenderInventory then ES:RenderInventory() end
+  if ES.VendorShop and ES.VendorShop.Refresh then ES.VendorShop:Refresh() end
+  if ES.AuctionSell and ES.AuctionSell.Refresh then ES.AuctionSell:Refresh() end
+end
+
+function Inventory.SetForceVendor(itemID, on)
+  ES.db.forceVendor = ES.db.forceVendor or {}
+  ES.db.forceVendor[itemID] = on or nil
+  if not next(ES.db.forceVendor) then ES.db.forceVendor = nil end
+  ES:Print(string.format(on and L["%s: se propondrá venderlo al vendedor. Ctrl+clic derecho en su fila lo devuelve a la AH."]
+    or L["%s: vuelve a compararse con la AH."], ES:DataItemName(itemID) or ("#" .. itemID)))
+  RefreshSellViews()
+end
+
+-- Al revés: lo que va al vendedor porque la AH es arriesgada, a la AH (Ctrl+clic
+-- derecho en su fila): prefieres arriesgar el depósito. ES.db.forceAH[itemID] = true
+function Inventory.ForceAH(itemID)
+  return ES.db.forceAH ~= nil and ES.db.forceAH[itemID] == true
+end
+
+function Inventory.SetForceAH(itemID, on)
+  ES.db.forceAH = ES.db.forceAH or {}
+  ES.db.forceAH[itemID] = on or nil
+  if not next(ES.db.forceAH) then ES.db.forceAH = nil end
+  ES:Print(string.format(on and L["%s: se propondrá anunciarlo en la AH. Ctrl+clic derecho en su fila lo devuelve al vendedor."]
+    or L["%s: vuelve a compararse con la AH."], ES:DataItemName(itemID) or ("#" .. itemID)))
+  RefreshSellViews()
+end
+
 -- Qué hacer con cada objeto de tus bolsas:
 -- { itemID, count, keep, vendorN, vendorUnit, ahN, ahUnit (neto por unidad), listPrice,
 --   value, rise (subida respecto a su referencia, 0.4 = +40%), ref, verdict, fair }
@@ -172,11 +211,16 @@ function Inventory:List()
     local vendor = not it.noValue and ES:VendorSellPrice(id) or 0
     -- (sellN: las que se podrían vender; con alertas dudosas solo AH_FEW van a la AH,
     -- y la ventana junto a la AH ofrece Ctrl+clic para anunciarlas todas)
-    local e = { itemID = id, count = it.count, keep = keep, never = never, vendorUnit = vendor, vendorN = 0, ahN = 0, value = 0, sellN = n }
-    local entry = scan and scan.items[id]
+    local e = { itemID = id, count = it.count, keep = keep, never = never, vendorUnit = vendor, vendorN = 0, ahN = 0, value = 0, sellN = n, link = it.link }
+    -- Lo gris (calidad 0) va siempre al vendedor: ni se mira la AH (la ventana junto a
+    -- la AH proponía anunciar grises). La calidad, de las bolsas o, si no, del juego
+    local quality = it.quality
+    if quality == nil then quality = select(2, ES:GetItemData(id)) end
+    local poor = quality == 0
+    local entry = not poor and scan and scan.items[id] or nil
     -- Tu escaneo no lo tiene: el precio de Auctionator o TSM, si lo hay (solo el
     -- mínimo; Market:AddonPrice). Tu escaneo siempre manda
-    if n > 0 and not it.bound and not (entry and entry.minUnit) then
+    if n > 0 and not it.bound and not poor and not (entry and entry.minUnit) then
       local ext = ES.Market:AddonPrice(id)
       if ext then
         entry = { minUnit = ext.price }
@@ -185,8 +229,8 @@ function Inventory:List()
     end
     -- Sin precio en la AH no se ha comparado: que se vea (si no, "al vendedor" parece
     -- que la AH paga menos)
-    if n > 0 and not it.bound and not (entry and entry.minUnit) then e.noAH = true end
-    if n > 0 and not it.bound and entry and entry.minUnit then
+    if n > 0 and not it.bound and not poor and not (entry and entry.minUnit) then e.noAH = true end
+    if n > 0 and not it.bound and not poor and entry and entry.minUnit then
       local fair = ES.Market:FairPrice(id, entry.minUnit)
       local listPrice = ES.Market.ListPrice(fair)
       -- Lo que te queda es tras la comisión: el depósito se devuelve al venderse
@@ -227,16 +271,27 @@ function Inventory:List()
       if net and compare - vendor >= math.max(AH_MIN_GAIN, vendor * AH_MIN_PCT) and verdict ~= "avoid" then
         local onAH = verdict == "good" and n or math.min(n, AH_FEW)
         e.ahN, e.ahUnit = onAH, net
+        -- Sin saber si se venden bien: unas pocas ahora y el resto SE GUARDA para
+        -- anunciarlas cuando se vendan (en varios días). Antes iba al vendedor, y si en
+        -- la AH valen claramente más (Fire Oil: 1s frente a 2c) era tirar el dinero
+        e.ahLater = n - onAH
       end
     end
-    e.vendorN = vendor > 0 and (n - e.ahN) or 0
-    -- Al vendedor solo se propone lo que NO vale para la AH (CurseForge: "me propone
-    -- vender la mitad del inventario, aunque en la AH valga más"). Sin precio de AH no
-    -- se sabe (no escaneaste, o nadie lo vende ahora) y la AH arriesgada sí vale más si
-    -- se vende: ninguno de los dos va a "Vender al vendedor", salen aparte (unsure) y
-    -- se pueden vender con clic. Lo gris (calidad 0) sí: la AH no lo quiere
-    local poor = it.quality == 0
-    if e.vendorN > 0 and e.ahN == 0 and ((e.noAH and not poor) or e.riskyAH) then e.unsure = true end
+    e.vendorN = vendor > 0 and (n - e.ahN - (e.ahLater or 0)) or 0
+    -- Al vendedor va lo que NO vale para la AH. Sin precio de AH (no escaneaste, o nadie
+    -- lo vende ahora) o con la AH arriesgada (valdría más, pero si caduca pierdes el
+    -- depósito) también: al vendedor, con su nota en la fila ("sin precio de AH", "AH
+    -- arriesgada"). Antes salían aparte, "sin precio de AH fiable: decide tú", y no se
+    -- proponían a ninguno de los dos (Discord: Linen Belt, Red Linen Bag... "no me
+    -- gusta lo de decide tú"). Lo arriesgado se puede pasar a la AH con Ctrl+clic derecho
+    -- Lo pasaste al vendedor (Ctrl+clic derecho en una fila de la AH): todo al vendedor
+    if n > 0 and vendor > 0 and Inventory.ForceVendor(id) then
+      e.ahN, e.ahLater, e.rise = 0, nil, nil
+      e.vendorN, e.forcedVendor = n, true
+    -- Lo arriesgado que pasaste a la AH (Ctrl+clic derecho): todo a la AH, a su precio
+    elseif n > 0 and e.riskyAH and e.ahNet and e.listPrice and Inventory.ForceAH(id) then
+      e.ahN, e.ahUnit, e.ahLater, e.vendorN, e.forcedAH = n, e.ahNet, nil, 0, true
+    end
     e.value = e.ahN * (e.ahUnit or 0) + e.vendorN * vendor
     -- Solo informativo: si desencantarlo (también lo ligado) vale bastante más que
     -- venderlo, se dice en la fila y el tooltip; el addon no desencanta nada
@@ -342,6 +397,9 @@ local function Tooltip(e, noActions)
       GameTooltip:AddDoubleLine(string.format(L["%d en la AH a %s"], e.ahN, ES.Money(e.listPrice)),
         "+" .. ES.Money(e.ahN * e.ahUnit), 1, 0.82, 0, 1, 1, 1)
       GameTooltip:AddLine(L["(lo que te queda tras la comisión de la AH; el depósito se devuelve al venderse)"], 0.6, 0.6, 0.6, true)
+      if (e.ahLater or 0) > 0 then
+        GameTooltip:AddLine(string.format(L["Guarda las otras %d: no se sabe si se venden bien, así que anuncia unas pocas y, cuando se vendan, las siguientes (aunque sea en varios días). En la AH valen más que en el vendedor."], e.ahLater), 1, 0.82, 0, true)
+      end
       -- De cuándo es ese precio (viejo: en naranja; puede haber bajado)
       local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
       if e.priceSource then
@@ -414,12 +472,33 @@ local function Tooltip(e, noActions)
       GameTooltip:AddLine(L["Clic derecho: volver a proponerlo para vender."], 0.6, 0.6, 0.6)
     elseif e.keep < e.count then
       GameTooltip:AddLine(L["Clic derecho: no venderlo nunca."], 0.6, 0.6, 0.6)
+      if e.forcedVendor or e.forcedAH then
+        GameTooltip:AddLine(L["Ctrl+clic derecho: volver a compararlo con la AH."], 0.6, 0.6, 0.6)
+      elseif Inventory.CanForceVendor(e) then
+        GameTooltip:AddLine(L["Ctrl+clic derecho: venderlo al vendedor."], 0.6, 0.6, 0.6)
+      elseif Inventory.CanForceAH(e) then
+        GameTooltip:AddLine(L["Ctrl+clic derecho: anunciarlo en la AH (arriesgando el depósito)."], 0.6, 0.6, 0.6)
+      end
     end
     GameTooltip:Show()
   end
 end
 
 Inventory.Tooltip = Tooltip -- (también la ventana junto a la AH, AuctionSellUI.lua)
+
+-- ¿Se puede pasar al vendedor con Ctrl+clic derecho? Lo que va (o podría ir) a la AH y
+-- el vendedor compra
+local function CanForceVendor(e)
+  return (e.vendorUnit or 0) > 0 and not e.never and not e.forcedAH and (e.ahN > 0 or (e.ahLater or 0) > 0) and true or false
+end
+Inventory.CanForceVendor = CanForceVendor
+
+-- ¿Y a la AH? Lo que va al vendedor porque la AH es arriesgada (tiene precio)
+local function CanForceAH(e)
+  return e.riskyAH and e.ahNet and e.listPrice and e.vendorN > 0 and e.ahN == 0
+    and not e.never and not e.forcedVendor and true or false
+end
+Inventory.CanForceAH = CanForceAH
 
 -- Clic: con la AH abierta anuncia lo que va a la AH; con el vendedor, vende lo suyo
 local function Act(e)
@@ -457,9 +536,17 @@ local function Line(e, mode)
     if e.ahN > 0 then
       parts[#parts + 1] = string.format(L["%sAH: %d a %s|r (%s)"], GOLD, e.ahN, ES.Money(e.listPrice), ES.Market.LABELS[e.verdict] or "")
     end
+    -- (el resto, para anunciarlo cuando se vendan esas: corto, que no se corte)
+    if (e.ahLater or 0) > 0 then parts[#parts + 1] = GREY .. string.format(L["+%d después"], e.ahLater) .. "|r" end
     if e.vendorN > 0 then parts[#parts + 1] = string.format(L["vendedor: %d a %s"], e.vendorN, ES.Money(e.vendorUnit)) end
-    if e.noAH then parts[#parts + 1] = ORANGE .. L["sin precio de AH"] .. "|r" end
-    if e.riskyAH then parts[#parts + 1] = GREY .. L["AH arriesgada: puede caducar"] .. "|r" end
+    if e.forcedVendor then
+      parts[#parts + 1] = GREY .. L["lo pasaste al vendedor"] .. "|r"
+    elseif e.forcedAH then
+      parts[#parts + 1] = GREY .. L["lo pasaste a la AH"] .. "|r"
+    else
+      if e.noAH then parts[#parts + 1] = ORANGE .. L["sin precio de AH"] .. "|r" end
+      if e.riskyAH then parts[#parts + 1] = GREY .. L["AH arriesgada: puede caducar"] .. "|r" end
+    end
     if e.de then parts[#parts + 1] = GOLD .. string.format(L["desencantado: ~%s"], ES.Money(e.de.value)) .. "|r" end
     if e.rise then parts[1] = GREEN .. string.format(L["+%d%% sobre su precio habitual"], math.floor(e.rise * 100 + 0.5)) .. "|r · " .. (parts[1] or "") end
     if e.keep > 0 then parts[#parts + 1] = GREY .. string.format(L["guarda %d para tus rutas"], e.keep) .. "|r" end
@@ -470,8 +557,17 @@ local function Line(e, mode)
     icon = texture or 134400, title = string.format("%d× %s", e.count, name or ("#" .. e.itemID)), sub = sub,
     value = sells and ES.UI.Signed(-e.value) or "", item = e.itemID,
     tooltip = Tooltip(e), onClick = sells and function() Act(e) end or nil,
-    -- Clic derecho: no venderlo nunca (o, en "No se venden", volver a proponerlo)
-    onRightClick = (sells or mode == "never") and function() Inventory.SetNeverSell(e.itemID, mode ~= "never") end or nil,
+    -- Clic derecho: no venderlo nunca (o, en "No se venden", volver a proponerlo).
+    -- Ctrl+clic derecho: lo de la AH (o sin precio fiable) al vendedor, o lo que pasaste
+    -- al vendedor de vuelta a la AH
+    onRightClick = (sells or mode == "never") and function()
+      if sells and IsControlKeyDown and IsControlKeyDown() then
+        if e.forcedAH then Inventory.SetForceAH(e.itemID, false) return end
+        if e.forcedVendor or CanForceVendor(e) then Inventory.SetForceVendor(e.itemID, not e.forcedVendor) return end
+        if CanForceAH(e) then Inventory.SetForceAH(e.itemID, true) return end
+      end
+      Inventory.SetNeverSell(e.itemID, mode ~= "never")
+    end or nil,
   }
 end
 
@@ -520,16 +616,14 @@ end
 -- vendedor (la sección "vendor") y junto a la AH ("rising" y "ah"). Así enseñan
 -- exactamente lo mismo que la pestaña (antes la del vendedor hacía su propia lista y
 -- proponía el resto "vendedor: 2" de objetos que la pestaña pone en la AH)
--- { rising, ah, vendor, unsure, keep, never, notWorth } de Inventory:List()
--- (unsure: sin precio de AH o AH arriesgada; el vendedor los compraría, pero no se
--- proponen: ni la ventana del vendedor ni "Vender al vendedor" los venden)
+-- { rising, ah, vendor, keep, never, notWorth } de Inventory:List() (lo que no tiene
+-- precio de AH fiable va con el vendedor, con su nota: ya no hay sección "decide tú")
 function Inventory:Sections(list)
   list = list or self:List()
-  local s = { rising = {}, ah = {}, vendor = {}, unsure = {}, keep = {}, never = {}, notWorth = {} }
+  local s = { rising = {}, ah = {}, vendor = {}, keep = {}, never = {}, notWorth = {} }
   for _, e in ipairs(list) do
     if e.value > 0 and e.rise and e.ahN > 0 then s.rising[#s.rising + 1] = e
     elseif e.ahN > 0 then s.ah[#s.ah + 1] = e
-    elseif e.unsure then s.unsure[#s.unsure + 1] = e
     elseif e.vendorN > 0 then s.vendor[#s.vendor + 1] = e
     elseif e.riskyAH and not e.never and e.count > e.keep then s.notWorth[#s.notWorth + 1] = e end
     if e.never then s.never[#s.never + 1] = e
@@ -587,7 +681,10 @@ function ES:RenderInventory()
     if #items == 0 then return end
     if not mode and not hinted then
       hinted = true
-      title = title .. GREY .. "  ·  " .. L["Clic derecho en una fila: no venderlo nunca."] .. "|r"
+      -- (con algo en la AH: también el Ctrl+clic derecho, que la pasa al vendedor)
+      local ahRows = #rising > 0 or #ah > 0
+      title = title .. GREY .. "  ·  " .. (ahRows and L["Clic derecho: no venderlo nunca · Ctrl+clic derecho: al vendedor."]
+        or L["Clic derecho en una fila: no venderlo nunca."]) .. "|r"
     end
     lines[#lines + 1] = { section = title }
     for _, e in ipairs(items) do lines[#lines + 1] = Line(e, mode) end
@@ -595,7 +692,6 @@ function ES:RenderInventory()
   Section(L["Ha subido: véndelo ahora"], rising)
   Section(L["Vender en la Casa de Subastas"], ah)
   Section(L["Vender al vendedor"], vendor)
-  Section(L["Sin precio fiable de AH: no se propone al vendedor"], sec.unsure)
   Section(L["Guardar para tus rutas"], keep, "keep")
   Section(L["No compensa venderlo ahora"], sec.notWorth, "notworth")
   Section(L["No se venden"], never, "never")

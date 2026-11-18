@@ -18,10 +18,10 @@ ROOT = Path(__file__).resolve().parent.parent
 NAME = "CraftersJournal"
 IGNORE_DIRS = {"tools", "docs", "dist", ".github", ".git", "__pycache__"}
 IGNORE_EXT = {".py", ".md", ".pyc"}
-# Herramientas del desarrollador y el asistente de ruta, que aún no se publica (como
-# en .pkgmeta)
-IGNORE_FILES = {"DevTools.lua", "Assistant.lua", "Data/Bankers.lua"}
-IGNORE_PREFIXES = ("Media/Assistant/",)
+# Herramientas del desarrollador y los bancos del asistente (apagados), que aún no se
+# publican (como en .pkgmeta). El asistente de ruta sí (beta)
+IGNORE_FILES = {"DevTools.lua", "Data/Bankers.lua"}
+IGNORE_PREFIXES = ()
 # Como BigWigsMods/packager: en el .toc se quita lo que va entre estas dos líneas
 DO_NOT_PACKAGE = re.compile(r"^#@do-not-package@\s*$.*?^#@end-do-not-package@\s*$\n?", re.M | re.S)
 
@@ -54,9 +54,12 @@ def main():
         toc_out = z.read(f"{NAME}/{NAME}.toc").decode("utf-8")
         assert "DevTools" not in toc_out and f"{NAME}/DevTools.lua" not in z.namelist(), \
             "DevTools.lua se ha colado en el zip"
-        assert "Assistant" not in toc_out and "Bankers" not in toc_out \
-            and not any("Assistant" in n or "Bankers" in n for n in z.namelist()), \
-            "el asistente (aún sin publicar) se ha colado en el zip"
+        assert "Bankers" not in toc_out and not any("Bankers" in n for n in z.namelist()), \
+            "los bancos del asistente (aún sin publicar) se han colado en el zip"
+        # El asistente sí va: su archivo, su línea del .toc, los buzones y sus iconos
+        for need in ("Assistant.lua", "Data/Mailboxes.lua", "Media/Assistant/HelpBig.tga"):
+            assert f"{NAME}/{need}" in z.namelist(), f"falta {need} en el zip"
+        assert "Assistant.lua" in toc_out and "Mailboxes.lua" in toc_out, "falta el asistente en el .toc del zip"
     print(f"{dest} ({dest.stat().st_size // 1024} KB, {len(names)} archivos, versión {version})")
 
 

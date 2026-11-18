@@ -1,9 +1,7 @@
 # Asistente de ruta (modo mini): diseño
 
-**Salida prevista: beta opcional.** Al publicarlo irá desactivado por defecto: la
-primera casilla de su categoría en /cj opciones, "Activar el asistente de ruta (beta)"
-(`A.Enabled`, `ES.db.assistant.enabled`), lo enciende. Sin activar no sale, `/cj mini`
-dice cómo activarlo y el catalejo junto a Dejar ruta no aparece.
+**Siempre activo.** Ya no hay casilla para activarlo (`A.Enabled` solo mira que haya
+`ES.db`; un `ES.db.assistant.enabled` guardado de antes se ignora).
 
 Estado: **en curso, solo en la copia de desarrollo.** `Assistant.lua` va dentro de
 `#@do-not-package@` en el .toc y, con `Media/Assistant`, está excluido en `.pkgmeta` y
@@ -123,15 +121,13 @@ con `RouteBuy`, lo mismo que Materiales: no hay lógica propia. Cuando son el pa
 el asistente marca "Compra" mientras la ventana sigue marcando el paso de fabricar; la
 ruta (recetas, cantidades, orden) es la misma.
 
-Hoy la ruta grande avisa de que faltan materiales con la línea de estado
-(`PhaseStatus`: "tramo 200-215: faltan ~8 Runecloth") y con avisos en el chat
-(`ES:PhaseNotices`: tramo nuevo, siguiente tanda, "los puntos tardan en subir: compra
-un poco más"). Pero no hay ningún paso de la ruta que diga "ve a comprar". El asistente
+Hoy la ruta grande avisa de que faltan materiales con avisos en el chat
+(`ES:PhaseNotices`: tramo nuevo y "te has quedado sin materiales", sacados de las filas
+del asistente). Pero no hay ningún paso de la ruta que diga "ve a comprar". El asistente
 añade esas filas, calculadas con **lo mismo que ya usan esos avisos y la vista
 Materiales**: `Planner.RouteNeed` (vía `RouteBuy`). No hay cálculo nuevo.
 
-Objetivo: **seguir el asistente sin pensar** durante toda la ruta, incluidas las tandas y
-las rachas de mala suerte. **Nunca te deja en un callejón sin salida.**
+Objetivo: **seguir el asistente sin pensar** durante toda la ruta, incluidas las tandas. **Nunca te deja en un callejón sin salida.**
 
 ### Cuándo aparece una fila de compra
 
@@ -139,12 +135,22 @@ las rachas de mala suerte. **Nunca te deja en un callejón sin salida.**
    del tramo). **Siempre por tramos y tandas**, aunque la Lista de compra esté en "Ruta
    entera" (`Planner.RouteNeed` con `opts.phase`): la ruta te guía tanda a tanda.
    En el asistente, sin subtítulo (la lista de materiales va en el tooltip).
-2. **Siguiente tanda** (tramos en verde, `phase.batchTo`): gastada una tanda, la
-   siguiente. Es el mismo momento en que hoy sale el aviso "Siguiente tanda (hasta %d)".
-3. **Mala suerte**: los puntos no suben lo esperado y `PhaseOutlook.short` dice que no
-   llegas a acabar el tramo con lo que llevas. Es el mismo momento en que hoy sale "Los
-   puntos tardan en subir: compra un poco más". La fila dice cuánto más: `Compra ~8
-   Runecloth más`.
+2. **Comprado, a fabricar** (`Planner.Stocked`): al tener todo lo de la tanda (o del
+   tramo), se apunta en la partida hasta qué nivel llega (`db.prof[x].stocked`, con
+   la ruta). Desde ahí, mientras puedas fabricar el paso, ni el asistente, ni la Lista
+   de compra, ni el vendedor piden nada: lo que gastas es lo comprado. Sin apunte
+   (rutas de antes) vale lo mismo una vez subido un punto en el paso.
+3. **Reponer** (`phase.refill`): lo gastaste todo y no puedes seguir. Se pide la tanda
+   siguiente desde tu nivel, en una sola compra (pedir solo lo justo para el nivel
+   apuntado eran dos viajes seguidos). La fila dice "Para seguir fabricando, compra
+   más". **Nunca se habla de "mala suerte"**: en verde es lo normal.
+4. **Siguiente tanda**: al llegar al nivel apuntado se olvida y, cuando haga falta, se
+   pide la tanda siguiente (punto 1).
+
+Los avisos del chat (`ES:PhaseNotices`) salen de estas mismas filas: "Tramo nuevo" al
+cambiar de tramo y, cuando el paso pasa de fabricar a comprar, "Para seguir
+fabricando, compra N X. Está en la Lista de compra.", con lo mismo que pide la fila.
+Nunca a mitad de un paso de fabricar.
 
 **No depende de la Lista de compra:** si la quitaste (`RouteListHidden`), las filas salen
 igual, porque lo que falta para la ruta sigue faltando. Quitar la lista solo la quita de
@@ -209,6 +215,10 @@ El tooltip da la lista completa con lo que tienes y lo que falta de cada uno.
 
 ### Banco
 
+> **Apagado desde la 0.60.0** (`A.BANK = false` en Assistant.lua): daba inseguridad de
+> fallos. Sin foto ni eventos, `BankCount` da 0, no hay filas "Saca del banco" y la ayuda
+> del asistente no lo menciona. El código y sus pruebas siguen; para volver, `true`.
+
 - El juego solo da el contenido del banco con el banco abierto. Se guarda una **foto
   por personaje** en `BANKFRAME_OPENED` y `PLAYERBANKSLOTS_CHANGED` / `BAG_UPDATE` de las
   bolsas del banco.
@@ -224,8 +234,15 @@ El tooltip da la lista completa con lo que tienes y lo que falta de cada uno.
 
 ## 4. Navegación propia
 
-El asistente **no usa** Shortest Path Forever, TomTom ni el waypoint de Blizzard.
-La ventana grande sigue como hoy (`WP.SetWaypoint`).
+Un solo sistema para el destino, el de la ventana y el asistente: `WP.Mark`
+(`Waypoints.lua`). Lo marca con lo mejor que haya: la ruta de Shortest Path Forever;
+si no, la flecha de TomTom (quitando el punto anterior); si no, el waypoint de
+Blizzard en seguimiento. Eso lo pinta en el mapa grande y en el minimapa.
+
+- El asistente lo llama solo a cada destino nuevo, sin chat (siempre; ya no hay opción).
+- Pulsar un PNJ en la ventana (`WP.SetWaypoint`) lo marca igual y la flecha del
+  asistente pasa a apuntar a él hasta que cambie el paso (`A.SetTarget`).
+- La flecha 3D es siempre la propia.
 
 ### Destino
 
@@ -252,12 +269,14 @@ La ventana grande sigue como hoy (`WP.SetWaypoint`).
   Orgrimmar". Lista propia, a mano, de barcos y zepelines por bando y continente.
 - **Mazmorras e instancias** (sin posición): sin flecha, solo el nombre y la zona.
 
-### Minimapa y mapa del mundo
+### Minimapa (respaldo)
+
+Solo si `WP.Mark` no pudo marcar el destino (sin Shortest Path, TomTom ni waypoint del
+juego). El pin propio del mapa del mundo se quitó: lo pinta quien marca el destino.
 
 - Icono del destino en el minimapa. Si queda fuera, icono en el borde apuntando hacia él.
 - Línea de puntos dorada del jugador al destino, en línea recta (no hay cálculo de caminos).
 - Tener en cuenta el zoom, interior y exterior, y el minimapa que gira.
-- Icono del destino en el mapa del mundo.
 
 ### Lo que no se hace
 
@@ -317,17 +336,19 @@ Todo texto visible como `L["..."]` con su traducción en `Locales/` (enUS, deDE,
    (`C_Map.GetPlayerMapPosition`, `GetMapPosFromWorldPos` y su tamaño en yardas). El
    destino se fija al empezar el paso; pulsar el banner lo vuelve a buscar. En otro
    continente o sin posición (mazmorra), sin flecha y lo dice. **Sin probar en el juego.**
-6. [x] Minimapa y mapa del mundo. En el minimapa: icono del destino, flecha en el borde
-   si queda fuera y una línea de puntos desde ti (tamaño del minimapa por zoom, dentro o
-   fuera de edificios, y si gira). En el mapa del mundo abierto: el icono del destino si
-   cae en el mapa que miras. Iconos propios (`Pin`, `Edge`, `Dot`). **Sin probar en el juego.**
+6. [x] Minimapa y mapa del mundo. En el minimapa, solo si ni Shortest Path ni TomTom
+   pintan el camino: icono del destino y flecha en el borde si queda fuera (tamaño del
+   minimapa por zoom, dentro o fuera de edificios, y si gira). Sin opción propia. La
+   línea de puntos desde ti se quitó: se solapaba con el camino de Shortest Path. En el
+   mapa del mundo abierto: el icono del destino si cae en el mapa que miras. Iconos
+   propios (`Pin`, `Edge`). **Sin probar en el juego.**
 7. [x] Otro continente: "Está en Kalimdor" y "Barco en Humedales" / "Zepelín en Durotar",
    según tu bando (`CROSSINGS` en Assistant.lua; nombres de zona del juego, en tu idioma).
 8. [x] Opciones en la ventana de opciones (categoría "Asistente de ruta", la añade
    Assistant.lua; "Route Assistant" en inglés): sacarlo solo al empezar una ruta (si
    no, solo con el botón o /cj mini), bloquearlo, mostrar la flecha GPS (con ella van
-   los iconos del minimapa y del mapa) y mostrar las flechas de pasos (la pestaña de
-   abajo). El tamaño, con clic derecho.
+   los iconos del minimapa y del mapa) y "Controles siempre visibles" (sin ella, las
+   pestañas de alrededor se despliegan al pasar el ratón). El tamaño, con clic derecho.
 9. [x] Paso completado: brillo dorado y ✓ en el icono al avanzar.
 
 **Primera versión completa.** Falta probarla en el juego y, después, publicarla: quitar

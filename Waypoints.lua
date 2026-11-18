@@ -187,6 +187,9 @@ local function Item(itemID)
   return items[itemID]
 end
 
+-- Quién vende un objeto: solo los datos del addon (Data/MatVendors.lua, QuestieDB),
+-- iguales para todos. No se aprende de los vendedores que abres: cada jugador tendría
+-- resultados distintos según los que hubiera abierto
 function WP.Vendors(itemID)
   return Item(itemID).vendors
 end
@@ -285,6 +288,92 @@ local function Distance(npc)
   local w = npc.world
   if not (px and w) or w[1] ~= instance then return math.huge end
   return (px - w[2]) ^ 2 + (py - w[3]) ^ 2
+end
+
+-- Distancia (al cuadrado, en yardas) de ti a un PNJ por su id; math.huge si no se sabe
+-- (otro continente, sin posición). Para elegir entre dos recados el más cercano
+function WP.DistanceTo(npcID)
+  local npc = npcID and WP.NPC(npcID)
+  if not npc then return math.huge end
+  local ok, d = pcall(Distance, npc)
+  return ok and d or math.huge
+end
+
+-- Posición en el mundo de un PNJ { instancia, x, y } (o false), guardada en el PNJ
+local function WorldPos(npc)
+  if not npc.map or not (C_Map and C_Map.GetWorldPosFromMapPos and CreateVector2D) then return false end
+  if npc.world == nil then
+    local ok, instance, position = pcall(C_Map.GetWorldPosFromMapPos, npc.map, CreateVector2D(npc.x, npc.y))
+    npc.world = ok and instance and position and { instance, position:GetXY() } or false
+  end
+  return npc.world
+end
+
+-- El de `npcIDs` más cercano a otro PNJ (`refID`), no a ti: el vendedor de al lado del
+-- instructor al que vas a ir igualmente. Sin posición del de referencia, el más
+-- cercano a ti (WP.Nearest)
+function WP.NearestTo(npcIDs, refID)
+  local ref = refID and WP.NPC(refID)
+  local r = ref and WorldPos(ref)
+  if not r then return WP.Nearest(npcIDs) end
+  local best, bestD
+  for _, id in ipairs(npcIDs or {}) do
+    local npc = WP.NPC(id)
+    local w = npc and Usable(npc) and WorldPos(npc)
+    if w and w[1] == r[1] then
+      local d = (w[2] - r[2]) ^ 2 + (w[3] - r[3]) ^ 2
+      if not bestD or d < bestD then best, bestD = id, d end
+    end
+  end
+  return best or WP.Nearest(npcIDs)
+end
+
+-- Vendedores que, al abrirlos, no tenían un material (stock, datos que no cuadran):
+-- [npcID][itemID] = true, solo esta sesión (VendorUI.lua, BuyExact). No se vuelve a
+-- mandar ahí a por eso
+WP.vendorLacks = {}
+function WP.MarkVendorLacks(npcID, itemID)
+  if not (npcID and itemID) then return end
+  WP.vendorLacks[npcID] = WP.vendorLacks[npcID] or {}
+  WP.vendorLacks[npcID][itemID] = true
+end
+
+local NEAR_YARDS = 100 -- "al lado del instructor": como mucho esto (si no, el más cercano a ti)
+
+-- El vendedor para una fila de compra con varios materiales: el que vende más de ellos
+-- (los datos del addon: WP.Vendors; sin los que no los tenían al abrirlos) y, de esos,
+-- el más cercano a `refID` (el instructor al que vas igualmente) si está a menos de
+-- NEAR_YARDS de él; si no, el más cercano a ti
+function WP.VendorFor(itemIDs, refID)
+  local cover, all = {}, {}
+  for _, itemID in ipairs(itemIDs or {}) do
+    for _, v in ipairs(WP.Vendors(itemID) or {}) do
+      if not (WP.vendorLacks[v] and WP.vendorLacks[v][itemID]) then
+        if not cover[v] then cover[v] = 0 all[#all + 1] = v end
+        cover[v] = cover[v] + 1
+      end
+    end
+  end
+  local most = 0
+  for _, v in ipairs(all) do most = math.max(most, cover[v]) end
+  local best = {}
+  for _, v in ipairs(all) do if cover[v] == most then best[#best + 1] = v end end
+  if #best == 0 then return nil end
+  local ref = refID and WP.NPC(refID)
+  local r = ref and WorldPos(ref)
+  if r then
+    local near, nearD
+    for _, id in ipairs(best) do
+      local npc = WP.NPC(id)
+      local w = npc and Usable(npc) and WorldPos(npc)
+      if w and w[1] == r[1] then
+        local d = (w[2] - r[2]) ^ 2 + (w[3] - r[3]) ^ 2
+        if d <= NEAR_YARDS * NEAR_YARDS and (not nearD or d < nearD) then near, nearD = id, d end
+      end
+    end
+    if near then return near end
+  end
+  return WP.Nearest(best)
 end
 
 local function ShortestPath()
@@ -432,36 +521,79 @@ function WP.LocationText(npc)
   return npc.area and C_Map and C_Map.GetAreaInfo and C_Map.GetAreaInfo(npc.area) or L["lugar desconocido"]
 end
 
--- Marca el camino a un PNJ: ruta de Shortest Path Forever, flecha de TomTom o
--- punto de ruta del juego en seguimiento. Devuelve true si se marcó.
-function WP.SetWaypoint(npcID)
+-- Un solo sistema para llevarte a un PNJ (la ventana y el asistente): el destino se
+-- marca con lo mejor que haya, y eso lo pinta en el mapa grande y en el minimapa:
+--   1. la ruta de Shortest Path Forever, 2. la flecha de TomTom, 3. el punto de ruta
+--   del juego en seguimiento.
+-- Un destino nuevo sustituye al anterior (no se acumulan puntos de TomTom). Devuelve
+-- cómo se marcó ("shortestpath", "tomtom", "game") o nil si no se pudo.
+-- `silent`: sin chat (el asistente, que lo hace solo a cada paso)
+local tomtomUid -- el último punto que pusimos en TomTom (para quitarlo al cambiar)
+
+function WP.Mark(npcID, silent)
   local npc = WP.NPC(npcID)
-  if not npc then return false end
+  if not npc then return nil end
+  local function Say(msg) if not silent then ES:Print(msg) end end
   if not npc.map then
     if npc.area then -- en una mazmorra: se dice cuál
-      ES:Print(string.format(L["%s está en %s."], npc.name, WP.LocationText(npc)))
+      Say(string.format(L["%s está en %s."], npc.name, WP.LocationText(npc)))
     else -- PNJ nuevo de Forever que las bases de datos aún no han situado
-      ES:Print(string.format(L["Aún no se sabe dónde está %s: es nuevo de Forever y las bases de datos no lo tienen situado."], npc.name))
+      Say(string.format(L["Aún no se sabe dónde está %s: es nuevo de Forever y las bases de datos no lo tienen situado."], npc.name))
     end
-    return false
+    return nil
   end
   local where = WP.LocationText(npc)
+  local how
   local api = ShortestPath()
-  if api and type(api.Navigate) == "function" and api.Navigate("Crafter's Journal", npc.map, npc.x, npc.y, npc.name) then
-    ES:Print(string.format(L["Ruta marcada hacia %s, %s."], npc.name, where))
-    return true
+  if api and type(api.Navigate) == "function" then
+    local ok, res = pcall(api.Navigate, "Crafter's Journal", npc.map, npc.x, npc.y, npc.name)
+    if ok and res then how = "shortestpath" end
   end
-  if TomTom and TomTom.AddWaypoint then
-    TomTom:AddWaypoint(npc.map, npc.x, npc.y, { title = npc.name, from = "Crafter's Journal" })
-  elseif C_Map and C_Map.CanSetUserWaypointOnMap and C_Map.CanSetUserWaypointOnMap(npc.map) then
+  if not how and TomTom and TomTom.AddWaypoint then
+    if tomtomUid and TomTom.RemoveWaypoint then pcall(TomTom.RemoveWaypoint, TomTom, tomtomUid) end
+    local ok, uid = pcall(TomTom.AddWaypoint, TomTom, npc.map, npc.x, npc.y, { title = npc.name, from = "Crafter's Journal" })
+    if ok then tomtomUid, how = uid, "tomtom" end
+  end
+  if not how and C_Map and C_Map.CanSetUserWaypointOnMap and C_Map.CanSetUserWaypointOnMap(npc.map)
+      and UiMapPoint and C_Map.SetUserWaypoint then
     C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(npc.map, npc.x, npc.y))
     if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then C_SuperTrack.SetSuperTrackedUserWaypoint(true) end
-  else
-    ES:Print(string.format(L["%s está en %s."], npc.name, where))
-    return false
+    how = "game"
   end
-  ES:Print(string.format(L["Punto de ruta marcado hacia %s, %s."], npc.name, where))
-  return true
+  if not how then
+    Say(string.format(L["%s está en %s."], npc.name, where))
+    return nil
+  end
+  Say(string.format(how == "shortestpath" and L["Ruta marcada hacia %s, %s."] or L["Punto de ruta marcado hacia %s, %s."], npc.name, where))
+  WP.lastMark = how
+  return how
+end
+
+-- Quita lo último que marcamos (el paso nuevo no tiene a dónde ir, o no se encontró su
+-- PNJ): si no, seguía el camino al destino del paso anterior (Discord: el banner decía
+-- "Recoge el correo" y el camino seguía al subastador). Shortest Path, si tiene cómo
+function WP.ClearMark()
+  local how = WP.lastMark
+  WP.lastMark = nil
+  if how == "tomtom" and tomtomUid and TomTom and TomTom.RemoveWaypoint then
+    pcall(TomTom.RemoveWaypoint, TomTom, tomtomUid)
+    tomtomUid = nil
+  elseif how == "game" and C_Map and C_Map.ClearUserWaypoint then
+    pcall(C_Map.ClearUserWaypoint)
+  elseif how == "shortestpath" then
+    local api = ShortestPath()
+    for _, name in ipairs({ "Stop", "Cancel", "Clear" }) do
+      if api and type(api[name]) == "function" then pcall(api[name], "Crafter's Journal") break end
+    end
+  end
+end
+
+-- Al pulsar un PNJ en la ventana: se marca y, si el asistente está en marcha, su
+-- flecha pasa a apuntar a él (mismo destino en todas partes). true si se marcó
+function WP.SetWaypoint(npcID)
+  local how = WP.Mark(npcID)
+  if ES.Assistant and ES.Assistant.SetTarget then ES.Assistant.SetTarget(npcID, how) end
+  return how ~= nil
 end
 
 ---------------------------------------------------------------------------
@@ -496,10 +628,25 @@ local function ReleaseHover()
   hover:Hide()
 end
 
+-- ¿Se puede seleccionar? Los buzones (Data/Mailboxes.lua) van como PNJ para marcar el
+-- camino, pero son objetos: /targetexact no los encuentra y la macro volvía a tu objetivo
+-- de antes (Discord: en "Recoge el correo", el clic seleccionaba al subastador)
+local mailboxSet
+function WP.Targetable(npcID)
+  if not mailboxSet then
+    mailboxSet = {}
+    for _, id in ipairs(ES.Data.Mailboxes or {}) do mailboxSet[id] = true end
+  end
+  return npcID ~= nil and not mailboxSet[npcID]
+end
+
 function WP.HoverRow(row)
   if (InCombatLockdown and InCombatLockdown()) or not WP.Available() or not row.go then return end
-  local npc = WP.NPC(row.go() or 0)
+  local id = row.go()
+  local npc = WP.NPC(id or 0)
   if not (npc and npc.name) then return end
+  -- (sin estrella para lo que no se puede seleccionar: el clic hace lo de la fila)
+  if not WP.Targetable(id) then ReleaseHover() return end
   if not hover then
     hover = CreateFrame("Button", "CraftersJournalRowMarkButton", UIParent, "SecureActionButtonTemplate")
     -- Solo el botón izquierdo, como la fila (bajando o soltando, según la opción del juego)
@@ -535,7 +682,16 @@ function WP.HoverRow(row)
   hover:SetFrameLevel(row:GetFrameLevel() + 5)
   hover:ClearAllPoints()
   -- Sin tapar la ✕ de la fila (ni los botones de la esquina del asistente: row.hoverInset)
-  hover:SetPoint("TOPLEFT", row, "TOPLEFT")
+  -- ni el icono de un objeto: encima de él sale el tooltip del objeto (row.iconHover,
+  -- ProfessionUI.lua); en el resto de la fila, el de la fila. Antes lo tapaba (vista
+  -- Profit: el icono enseñaba el tooltip de la fila)
+  local left = 0
+  local ih = row.iconHover
+  if ih and ih:IsShown() then
+    local r, l = tonumber(ih:GetRight()), tonumber(row:GetLeft())
+    if r and l and r > l then left = r - l end
+  end
+  hover:SetPoint("TOPLEFT", row, "TOPLEFT", left, 0)
   hover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -(row.hoverInset or (row.onSkip and 28 or 0)), 0)
   hover:SetAttribute("macrotext", WP.MarkMacro(npc.name))
   hover:Show()
@@ -561,6 +717,7 @@ function WP.Target(kind, a, b)
     if kind == "auction" then return WP.Nearest(ES.Data.Auctioneers) end
     if kind == "sell" then return WP.Nearest(ES.Data.SellVendors) end
     if kind == "bank" then return WP.Nearest(ES.Data.Bankers or {}) end -- (Data/Bankers.lua: asistente)
+    if kind == "mailbox" then return WP.Nearest(ES.Data.Mailboxes or {}) end -- (Data/Mailboxes.lua: asistente)
     return WP.Nearest(WP.Vendors(a))
   end
 end

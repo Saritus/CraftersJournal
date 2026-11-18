@@ -17,8 +17,6 @@ ignore:
   # Herramientas del desarrollador (/cj whatsnew): solo en su copia. Su línea del .toc
   # va dentro de #@do-not-package@, que el empaquetador quita
   - DevTools.lua
-  # Asistente de ruta (docs/ASISTENTE.md): aún solo en la copia de desarrollo. Su línea
-  # del .toc también va dentro de #@do-not-package@
-  - Assistant.lua
+  # Bancos del asistente de ruta (A.BANK, apagado): aún solo en la copia de desarrollo.
+  # Su línea del .toc también va dentro de #@do-not-package@. El asistente se publica (beta)
   - Data/Bankers.lua
-  - Media/Assistant

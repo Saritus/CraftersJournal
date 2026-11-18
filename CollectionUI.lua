@@ -599,10 +599,18 @@ function ES:RenderCollectionDetail(frame)
   end
   KV(d, L["Fabricar 1"], e.cost and ES.UI.Signed(e.cost) or (GREY .. L["faltan precios"] .. "|r"))
   if e.itemID then
+    -- Lo que dan TODAS las unidades de una fabricación (Shadow Oil da 2), para que
+    -- cuadre con "Fabricar 1" y el beneficio; con varias, también el precio de cada una
+    -- (antes salía el de una sola con la etiqueta "(2 uds)": parecía vender con pérdida)
     local sell
     local vendorOnly = Settings().vendorProfit
-    if e.sellWhere == "ah" and e.ahPrice and not vendorOnly then sell = ES.Money(e.ahPrice) .. GREY .. L[" (AH)"] .. "|r"
-    elseif e.vendor and e.vendor > 0 then sell = ES.Money(e.vendor) .. GREY .. L[" (vendedor)"] .. "|r"
+    local qty = e.qty or 1
+    if e.sellWhere == "ah" and e.ahPrice and not vendorOnly then
+      sell = ES.Money(e.ahPrice * qty) .. GREY .. (qty > 1
+        and " (" .. string.format(L["AH %s/u"], ES.Money(e.ahPrice)) .. ")" or L[" (AH)"]) .. "|r"
+    elseif e.vendor and e.vendor > 0 then
+      sell = ES.Money(e.vendor * qty) .. GREY .. (qty > 1
+        and " (" .. string.format(L["vendedor %s/u"], ES.Money(e.vendor)) .. ")" or L[" (vendedor)"]) .. "|r"
     else sell = GREY .. (scanned and L["no hay ninguno"] or L["sin escanear"]) .. "|r" end
     KV(d, (e.qty or 1) > 1 and string.format(L["Vender lo fabricado (%s uds)"], ES.Num(e.qty)) or L["Vender lo fabricado"], sell, { item = e.itemID })
     if r.bop then KV(d, ORANGE .. L["Se liga al recogerlo: no se puede vender en la AH"] .. "|r") end

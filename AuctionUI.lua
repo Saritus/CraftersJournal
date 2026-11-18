@@ -163,6 +163,10 @@ local function Back(f)
 end
 
 function ES:OpenAuctionBuy(itemID, qty, okUnit)
+  -- (intentaste comprarlo en esta visita: si no había bastante, la ruta lo dirá al
+  -- cerrar la AH; ver ES.buyTried en ProfessionUI.lua)
+  ES.buyTried = ES.buyTried or { ah = {}, sells = {} }
+  if itemID then ES.buyTried.ah[itemID] = true end
   local A, f = C_AuctionHouse, AuctionHouseFrame
   if not (A and A.MakeItemKey and f and f.SelectBrowseResult and f.CommoditiesBuyFrame) then
     return self:SearchAuction(itemID)

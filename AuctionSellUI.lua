@@ -15,10 +15,14 @@ local L = ES.L
 local Sell = {}
 ES.AuctionSell = Sell
 
+-- MAX_ROWS: las que se ven a la vez; con más, la lista se desplaza (rueda o tirador).
+-- Antes el resto no se veía ("N más en la pestaña Inventario") y lo que volvías a
+-- proponer desde "No se venden" podía caer ahí y parecía que no volvía
 local ROW_H, MAX_ROWS = 34, 12
+local SCROLL_W = 6 -- (la guía del desplazamiento, a la derecha de las filas)
 local WIDTH = 300
 local COST_W = 74 -- columna del valor a la derecha (hasta "99g 99s 99c")
-local GREEN, GREY = "|cff40ff40", "|cff999999"
+local GREEN = "|cff40ff40"
 
 local panel
 
@@ -193,11 +197,22 @@ local function CreateWait(f)
 end
 
 -- La capa de espera según el escaneo (también al avanzar el %: ES:UpdatePostStatus)
+-- Acabado el escaneo, las alertas del mercado (Market:Index) se recalculan en segundo
+-- plano unos instantes: con las filas pintadas entre medias (índice viejo o vacío) los
+-- veredictos cambiaban y los objetos bailaban, salían y entraban. Hasta tenerlo, la
+-- capa de espera; al acabar, ES:OnScanComplete repinta (RefreshAllViews)
+local function IndexBuilding()
+  return ES.Market and ES.Market.Building and ES.Market.Building() or false
+end
+
 function Sell:UpdateWait()
   if not (panel and panel.wait) then return end
   local state, pct = ES.Ledger:PostPriceState()
   if state == "scanning" then
     panel.wait.text:SetText(string.format(L["Escaneando la AH... %d%%"], pct))
+    panel.wait:Show()
+  elseif IndexBuilding() then
+    panel.wait.text:SetText(L["Actualizando los precios..."])
     panel.wait:Show()
   else
     panel.wait:Hide()
@@ -237,10 +252,27 @@ local function CreatePanel(parent)
   f.sub:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -3)
   f.sub:SetWidth(WIDTH - 24)
   f.sub:SetJustifyH("LEFT")
+  -- Las filas, en una lista que se desplaza (ES.UI.WheelScroll, con su guía a la derecha)
+  f.scroll = ES.UI.WheelScroll(f, ROW_H)
+  f.content = CreateFrame("Frame", nil, f.scroll)
+  f.content:SetSize(WIDTH - 16, 1)
+  f.scroll:SetScrollChild(f.content)
+  f.scrollBar = ES.UI.ScrollIndicator(f.scroll, f.content, SCROLL_W - 2)
   f.rows = {}
-  for i = 1, MAX_ROWS do
-    local row = CreateFrame("Button", nil, f)
-    row:SetSize(WIDTH - 16, ROW_H)
+  f.hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  f.hint:SetJustifyH("LEFT")
+  if f.hint.SetSpacing then f.hint:SetSpacing(2) end
+  f.wait = CreateWait(f)
+  f:Hide()
+  return f
+end
+
+-- Fila `i` de la lista (se crean al hacer falta: puede haber más de las que se ven)
+local function GetRow(f, i)
+  if f.rows[i] then return f.rows[i] end
+  do
+    local row = CreateFrame("Button", nil, f.content)
+    row:SetSize(WIDTH - 16 - SCROLL_W, ROW_H)
     local hl = row:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
     hl:SetColorTexture(1, 0.82, 0.25, 0.1)
@@ -267,12 +299,21 @@ local function CreatePanel(parent)
     row:SetScript("OnLeave", function() GameTooltip:Hide() end)
     f.rows[i] = row
   end
-  f.hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  f.hint:SetJustifyH("LEFT")
-  if f.hint.SetSpacing then f.hint:SetSpacing(2) end
-  f.wait = CreateWait(f)
-  f:Hide()
-  return f
+  return f.rows[i]
+end
+
+-- Nombre de la fila: el del juego; si aún no lo tiene en caché, el del enlace de tus
+-- bolsas (ya trae el nombre y el color), y si no, el de los datos o "#id"
+local function RowName(e)
+  local name, _, pending = ES.UI.ItemLabel(e.itemID, "#" .. e.itemID)
+  if pending and e.link then
+    local text = e.link:match("%[(.-)%]")
+    if text and text ~= "" then
+      local color = e.link:match("^(|c%x%x%x%x%x%x%x%x)")
+      return color and (color .. text .. "|r") or text
+    end
+  end
+  return name
 end
 
 -- Dónde va: pegada a la AH; la lista de compra pequeña, si sale, a su derecha
@@ -296,6 +337,14 @@ function Sell:Refresh()
     PlaceShopping()
     return
   end
+  -- Recalculándose las alertas del mercado (tras un escaneo): las filas se quedan como
+  -- estaban bajo la capa de espera hasta que esté (Index() lo pone en marcha si el
+  -- escaneo es nuevo, y al acabar se repinta: ES:OnScanComplete o Market Ready)
+  if ES.Market and ES.Market.Index then ES.Market:Index() end
+  if IndexBuilding() and panel and panel:IsShown() then
+    self:UpdateWait()
+    return
+  end
   local list = self:List()
   if #list == 0 then
     if panel then panel:Hide() end
@@ -311,17 +360,25 @@ function Sell:Refresh()
   panel.sub:SetText(not scanning and ES.Ledger:PostPriceWarning() or L["Para vender en la AH, de tus bolsas:"])
   local function H(fs) return math.min(tonumber(fs:GetStringHeight()) or 12, 40) end
   local y = -(10 + H(panel.title) + 3 + H(panel.sub) + 8)
-  local shown = math.min(#list, MAX_ROWS)
+  local visible = math.min(#list, MAX_ROWS)
+  -- La lista: se ven MAX_ROWS y el resto se desplaza (sin perder dónde estabas al repintar)
+  panel.scroll:ClearAllPoints()
+  panel.scroll:SetPoint("TOPLEFT", 8, y)
+  panel.scroll:SetSize(WIDTH - 16, visible * ROW_H)
+  panel.content:SetSize(WIDTH - 16, #list * ROW_H)
+  if panel.scroll.UpdateScrollChildRect then panel.scroll:UpdateScrollChildRect() end
+  local range = math.max(0, (#list - visible) * ROW_H)
+  panel.scroll:SetVerticalScroll(math.min(range, tonumber(panel.scroll:GetVerticalScroll()) or 0))
+  y = y - visible * ROW_H
   local anyCapped = false
-  for i = 1, shown do
-    local row, e = panel.rows[i], list[i]
+  for i = 1, #list do
+    local row, e = GetRow(panel, i), list[i]
     row.entry = e
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", 8, y)
-    y = y - ROW_H
+    row:SetPoint("TOPLEFT", panel.content, "TOPLEFT", 0, -(i - 1) * ROW_H)
     local _, _, texture = ES:GetItemData(e.itemID)
     row.icon:SetTexture(texture or (GetItemIcon and GetItemIcon(e.itemID)) or 134400)
-    row.name:SetText((ES.UI.ItemLabel(e.itemID, "#" .. e.itemID)))
+    row.name:SetText(RowName(e))
     -- Cuántos y a cuánto se anuncian, la duración y lo que dicen las alertas
     -- (si las alertas dejan solo unas pocas, de cuántas: "5 de 77")
     local verdict = ES.Market.LABELS and ES.Market.LABELS[e.verdict]
@@ -333,10 +390,11 @@ function Sell:Refresh()
     row.cost:SetText(GREEN .. "+" .. ES.Money(e.ahN * (e.ahUnit or 0)) .. "|r")
     row:Show()
   end
-  for k = shown + 1, MAX_ROWS do
+  for k = #list + 1, #panel.rows do
     panel.rows[k].entry = nil
     panel.rows[k]:Hide()
   end
+  panel.scrollBar:Update()
   -- A la vista: qué hace el clic y el clic derecho (y cuántas no caben)
   panel.hint:ClearAllPoints()
   panel.hint:SetPoint("TOPLEFT", 12, y - 4)
@@ -348,11 +406,8 @@ function Sell:Refresh()
     .. KEY .. L["Mayús+clic"] .. "|r  " .. L["anunciar solo 1"] .. "\n"
     .. (anyCapped and (KEY .. L["Ctrl+clic"] .. "|r  " .. L["todas, sin las alertas"] .. "\n") or "")
     .. KEY .. L["Clic derecho"] .. "|r  " .. L["no venderlo nunca"]
-  if #list > shown then
-    hint = hint .. "\n" .. GREY .. string.format(L["(%d más en la pestaña Inventario)"], #list - shown) .. "|r"
-  end
   panel.hint:SetText(hint)
-  -- (hasta 5 líneas: con Ctrl+clic y "N más en la pestaña Inventario")
+  -- (hasta 4 líneas: con Ctrl+clic)
   y = y - 4 - math.max(14, math.min(tonumber(panel.hint:GetStringHeight()) or 0, 90))
   panel:SetHeight(-y + 10)
   self:UpdateWait()
@@ -366,28 +421,41 @@ do
   for _, e in ipairs({ "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "BAG_UPDATE_DELAYED", "GET_ITEM_INFO_RECEIVED" }) do
     ES.SafeRegister(f, e)
   end
-  local queued = false
+  -- Agrupado: se repinta una vez cuando dejan de llegar eventos (cada uno aplaza el
+  -- repintado). Al acabar un escaneo llegan ráfagas de GET_ITEM_INFO_RECEIVED y cada
+  -- una repintaba la lista a medias (nombres "#id" que iban y venían). Al abrir la AH,
+  -- además, la lista de compra pequeña se coloca primero
+  -- (como mucho ~2 s de espera: si los eventos no paran, se repinta igual)
+  local gen, since = 0, nil
+  local function Queue(delay)
+    gen = gen + 1
+    local mine, now = gen, GetTime and GetTime() or 0
+    since = since or now
+    if now - since > 2 then delay = 0 end
+    C_Timer.After(delay, function()
+      if mine == gen then
+        since = nil
+        Sell:Refresh()
+      end
+    end)
+  end
   f:SetScript("OnEvent", function(_, event)
     if not ES.db then return end
     if event == "AUCTION_HOUSE_CLOSED" then
       Sell.closed = nil
+      gen = gen + 1 -- (lo pendiente ya no hace falta)
       if panel then panel:Hide() end
-      if confirm then confirm.pending = nil confirm:Hide() end -- (sin AH no se puede anunciar)
       return
     end
-    if event == "AUCTION_HOUSE_SHOW" then Sell.closed = nil end
+    if event == "AUCTION_HOUSE_SHOW" then
+      Sell.closed = nil
+      Sell:HookPanels() -- (la ventana grande, al abrirse o cerrarse, la quita o la vuelve a poner)
+    end
     -- Con la AH cerrada no hay nada que hacer: GET_ITEM_INFO_RECEIVED y los cambios de
     -- bolsas llegan sin parar yendo por el mundo (otros addons piden objetos) y cada uno
     -- programaba un repintado
     if event ~= "AUCTION_HOUSE_SHOW" and not ES:IsAuctionHouseOpen() then return end
-    -- (agrupado: al abrir la AH la lista de compra pequeña se coloca primero)
-    if not queued then
-      queued = true
-      C_Timer.After(0.3, function()
-        queued = false
-        Sell:Refresh()
-      end)
-    end
+    Queue(event == "GET_ITEM_INFO_RECEIVED" and 0.6 or 0.3)
   end)
 end
 

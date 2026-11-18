@@ -506,6 +506,7 @@ function ES:SetupShoppingMini(ahFrame)
   if main and main:IsShown() then
     main:ClearAllPoints()
     main:SetPoint("TOPLEFT", ahFrame, "TOPRIGHT", 4, 0) -- (se queda dentro de la pantalla: SetClampedToScreen)
+    ES:KeepTabsOnScreen() -- (con sus pestañas: si no, no hay forma de salir de la página)
     mini:Hide()
     ES:MiniOnMainHide() -- (y al cerrarla, con la AH abierta, sale el panel pequeño)
     return

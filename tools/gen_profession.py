@@ -119,6 +119,10 @@ CAMP_RECIPES = {
 # Nivel que pide un pergamino: {item: habilidad}
 SCROLL_SKILL_HOTFIXES = {
     273096: 125,  # Plans: Tanning Rack, 125 (era 140), 6 nov
+    # Pergaminos que faltan en el ItemSparse de wago (sin ellos, train salía de amarilla - 10):
+    # nivel del tooltip de Wowhead Forever (17 nov), el mismo que da Mastercraft
+    234271: 300,  # Formula: Scroll: Wrath of the Swarm (salía 310)
+    274049: 125,  # Schematic: 9-60 Battery Pack (salía 115)
 }
 # Herramienta que pide una receta: {spell: categoría de TOOL_ITEMS}
 TOOL_HOTFIXES = {
@@ -261,12 +265,15 @@ def load_common():
     item_class = {int(r["ID"]): (int(r["ClassID"]), int(r["SubclassID"])) for r in rows("Item_forever")}
 
     # Pergamino de cada receta. Si hay varios (Forever reeditó algunos con ID nuevo,
-    # a veces copias sin requisitos), el que pide nivel de profesión; luego el más reciente
+    # a veces copias sin requisitos), el que vende algún PNJ de Forever; luego el que pide
+    # nivel de profesión; luego el más reciente. Los intendentes del Alba Argenta venden los
+    # de Classic (Pattern: Argent Boots 19216, a 255), no la copia de SoD (227896, a 290)
+    sold = forever_sold_any() or set()
     scrolls = {}
     for r in rows("RecipeScrolls_forever"):
         spell, item = int(r["Spell"]), int(r["ItemID"])
         best = scrolls.get(spell)
-        if best is None or (item in item_skill, item) > (best in item_skill, best):
+        if best is None or (item in sold, item in item_skill, item) > (best in sold, best in item_skill, best):
             scrolls[spell] = item
 
     tools, tool_masks = {}, {}
@@ -384,18 +391,25 @@ def sold_by_vendor(item_id):
 _forever_sold_any = None
 
 
+def forever_sold_any():
+    """Pergaminos que vende cualquier PNJ de Forever (FOREVER_VENDORS), también los de
+    mazmorra sin sitio en el mapa, o None si no están esos datos"""
+    global _forever_sold_any
+    if _forever_sold_any is None and FOREVER_VENDORS.exists():
+        with open(FOREVER_VENDORS, encoding="utf-8") as f:
+            _forever_sold_any = {int(r["item"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))}
+    return _forever_sold_any
+
+
 def vendor_only_gone(item_id):
     """Pergamino que en Classic solo vendía un PNJ y en Forever no vende nadie (ni sale
     de misiones ni de botín): no se consigue (Spitfire, Ironvine... de Aendel Windspear).
     Cuenta cualquier vendedor de Forever, también los de mazmorra sin sitio en el mapa
     (Lokhtos Darkbargainer, en Blackrock Depths)"""
-    global _forever_sold_any
-    if _forever_sold_any is None:
-        if not FOREVER_VENDORS.exists():
-            return False
-        with open(FOREVER_VENDORS, encoding="utf-8") as f:
-            _forever_sold_any = {int(r["item"]) for r in csv.DictReader(l for l in f if not l.startswith("#"))}
-    if item_id in _forever_sold_any:
+    sold_any = forever_sold_any()
+    if sold_any is None:
+        return False
+    if item_id in sold_any:
         return False
     questie.load_store()
     r = questie.row("Item", item_id)

@@ -219,6 +219,14 @@ local OPTIONS = {
   -- Lista de compra
   { key = "noAuctionWindows", cat = "shopping", label = "Lista de compra junto a la Casa de Subastas",
     desc = "Al abrir la AH: los materiales de tu ruta que te faltan, para comprarlos. Desactivada, se sigue pudiendo abrir con el botón de encima de la AH." },
+  -- Tamaño de la tanda en verde (Planner.BatchCrafts): la compra por tramos en las
+  -- recetas verdes compra para unas tantas fabricaciones; al gastarlas, la siguiente
+  { key = "batchCrafts", cat = "shopping", kind = "slider", label = "Tamaño de las tandas (recetas verdes)",
+    desc = "En verde no todas las fabricaciones suben punto: la ruta compra para unas tantas y, al gastarlas, la siguiente. Más grande, menos viajes a la AH; más pequeña, menos material de sobra si tienes suerte.",
+    steps = ES.Planner.BATCH_STEPS, default = ES.Planner.BATCH_CRAFTS,
+    text = function(v) return string.format(L["%d fabricaciones"], v) end,
+    enabled = function() return true end,
+    apply = function() if ES.RefreshAllViews then ES:RefreshAllViews() end ES:ApplyOptions() end },
   -- Casa de Subastas
   { key = "noAuctionSellWindow", cat = "auction", label = "Vender en la AH desde tus bolsas",
     desc = "Al abrir la AH: una ventana con lo de tus bolsas que se vende mejor en la AH. Clic en una fila para anunciarlo." },
@@ -397,7 +405,7 @@ local function CreateSlider(page, o)
     ES.db[o.key] = (math.abs(v - o.default) > 1e-9) and v or nil
     row.value:SetText(o.text(v))
     if was == ES.db[o.key] then return false end
-    ApplyMarketSetting()
+    if o.apply then o.apply() else ApplyMarketSetting() end
     return true
   end
   -- (al soltar o tras un momento quieto: arrastrar no recalcula en cada escalón)

@@ -10,6 +10,9 @@ ES.homePlanCache = {}
 function ES:ClearHomeCache()
   self.homePlanCache = {}
   self.planGen = (self.planGen or 0) + 1 -- descarta las rutas que se estén calculando
+  -- (y las quita de la cola: si no, se calculaban enteras delante de las nuevas;
+  -- quien las esperaba las vuelve a pedir: RefreshAllViews, RebuildMainFrame...)
+  if self.Jobs and self.Jobs.Cancel then self.Jobs.Cancel("plan:") end
 end
 -- Cuándo se rehace una ruta (solo la de esa profesión; se calcula cuando se ve):
 --   cambian tus bolsas: solo las que usan lo de las bolsas y no tienen la ruta fijada
