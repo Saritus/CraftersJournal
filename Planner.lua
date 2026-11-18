@@ -2420,6 +2420,7 @@ function Planner:Plan(data, opts)
     local inf = info[st.id]
     st.recipe = data.recipes[st.id]
     st.crafts = math.ceil(st.expected - 0.001)
+    -- El desglose usa fabricaciones enteras al mismo precio medio que el total.
     local factor = st.crafts / st.expected
     for _, rg in ipairs(st.reagents) do
       rg.qty = rg.qty * factor
