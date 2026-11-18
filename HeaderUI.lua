@@ -90,7 +90,7 @@ end
 -- Informar de un error: el juego no abre enlaces, así que se muestra el del
 -- Discord seleccionado para copiarlo con Ctrl+C
 ---------------------------------------------------------------------------
-ES.DISCORD_URL = "https://discord.gg/DjT4HatsF"
+ES.DISCORD_URL = "https://discord.gg/jVAK7DvtMu"
 local BUG_ICON = "Interface\\HelpFrame\\HelpIcon-Bug"
 
 local reportDialog

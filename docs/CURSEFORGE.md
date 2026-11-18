@@ -82,11 +82,11 @@ Crafter's Journal plans the **cheapest route** for every profession using **real
 
 ## 💬 Feedback & support
 
-Found a wrong trainer, a missing recipe or a bug? Tell me on **[Discord](https://discord.gg/DjT4HatsF)** or in the comments — every report makes the routes better.
+Found a wrong trainer, a missing recipe or a bug? Tell me on **[Discord](https://discord.gg/jVAK7DvtMu)** or in the comments — every report makes the routes better.
 
 If Crafter's Journal saved you some gold, you can **[☕ buy me a coffee](https://buymeacoffee.com/brunobasas)**. It's always free, and it always will be.
 
-[![Donate](URL_BOTON_DONATE)](https://buymeacoffee.com/brunobasas) [![Discord](URL_BOTON_DISCORD)](https://discord.gg/DjT4HatsF)
+[![Donate](URL_BOTON_DONATE)](https://buymeacoffee.com/brunobasas) [![Discord](URL_BOTON_DISCORD)](https://discord.gg/jVAK7DvtMu)
 
 <sub>Data: WoW Forever client tables (wago.tools), QuestieDB and CMaNGOS, community Merchant's Favor guides. Routes are checked against the wow-professions.com Forever guides.</sub>
 ```
