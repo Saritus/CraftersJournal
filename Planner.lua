@@ -2420,6 +2420,11 @@ function Planner:Plan(data, opts)
     local inf = info[st.id]
     st.recipe = data.recipes[st.id]
     st.crafts = math.ceil(st.expected - 0.001)
+    local factor = st.crafts / st.expected
+    for _, rg in ipairs(st.reagents) do
+      rg.qty = rg.qty * factor
+      rg.cost = rg.cost * factor
+    end
     st.unitCost = st.costSum / st.expected
     st.unitValue = st.valueSum / st.expected
     st.sale = inf.sale
