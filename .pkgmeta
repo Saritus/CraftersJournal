@@ -12,6 +12,10 @@ ignore:
   - docs
   - dist
   - .github
+  # OpenSpec (especificaciones y skills para el asistente de programación): solo en el repo
+  - openspec
+  - .agents
+  - .claude
   - "*.py"
   - "*.md"
   # Herramientas del desarrollador (/cj whatsnew): solo en su copia. Su línea del .toc
