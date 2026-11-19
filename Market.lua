@@ -38,10 +38,13 @@ Market.LABELS = ES.Localize({
 })
 
 -- Índice del historial por objeto, construido una vez por escaneo (recorrer el
--- historial por cada receta congelaría el juego):
---   points[item] = { {time, min, listings, quantity}, ... } de más antigua a más nueva
---   stuck[item]  = { {elapsed, siguen, baratas}, ... }
---   offers[item] = { {unit, count, n}, ... } del último escaneo
+-- historial por cada receta congelaría el juego). Guarda por objeto SOLO los totales
+-- que usan las señales, no las filas: items[item] = un array de números (ver I_*).
+-- Antes guardaba una tabla por dato (cada punto del historial, cada "baratas que
+-- siguen", cada subasta): ~280.000 tablas y ~48 MB con 60 escaneos en la semana, todo
+-- el rato aunque no se abriera la ventana. Ahora ocupa lo mismo con 5 escaneos que con
+-- 200 (~0,7 MB con 2.000 objetos). Los puntos de cada objeto solo se guardan mientras
+-- se construye (arrays planos), para lo que depende del último punto.
 -- Construirlo es recorrer todo el historial de la semana: con 61 escaneos (3 MB) y
 -- 56.000 subastas seguidas, ~350 ms de golpe, y crece con cada escaneo. En el juego se
 -- hace en segundo plano, repartido entre fotogramas (BUILD_BUDGET por fotograma):
@@ -50,7 +53,18 @@ Market.LABELS = ES.Localize({
 -- y al acabar cada escaneo, así suele estar listo antes de que haga falta. Fuera del
 -- juego (sin debugprofilestop), de golpe.
 local cache
-local EMPTY = { stamp = "", points = {}, stuck = {}, offers = {}, empty = true }
+local EMPTY = { stamp = "", items = {}, empty = true }
+
+-- Casillas del array de cada objeto (array y no campos con nombre: ~3 veces menos memoria)
+local I_HAZARD, I_EXPOSURE, I_HOURS, I_REM, I_TOT = 1, 2, 3, 4, 5 -- estancado (sumas)
+local I_POINTS, I_LAST_T, I_LAST_MIN, I_SINCE, I_FIRST_T = 6, 7, 8, 9, 10 -- precio clavado
+local I_LAST_Q, I_OLD_Q, I_OLD_T = 11, 12, 13                     -- más oferta (false: no hay)
+local I_REF, I_REF_N, I_REF_AGO = 14, 15, 16                       -- referencia (false: no hay)
+local I_WALL_MIN, I_WALL_LISTINGS, I_WALL_UNITS = 17, 18, 19      -- competencia (false: no está)
+
+local function NewItem()
+  return { 0, 0, 0, 0, 0, 0, false, false, false, false, false, false, false, false, false, false, false, 0, 0 }
+end
 local BUILD_BUDGET = 3 -- ms por fotograma
 local building       -- { stamp, co } mientras se construye
 local servedStale    -- se dio un índice viejo (o vacío) mientras se construía el nuevo
@@ -64,47 +78,126 @@ local function Stamp()
 end
 
 -- `pause()` se llama cada poco: en segundo plano cede el fotograma si se pasa del presupuesto
+-- Precio de referencia de los puntos de un objeto (array plano: tiempo, mínimo,
+-- cantidad, ... de más antiguo a más nuevo): mediana de los mínimos de cada día de los
+-- últimos REF_DAYS días con escaneo, sin las últimas REF_GAP horas. Devuelve referencia,
+-- nº de días usados y hace cuántos días es el más reciente, o nil
+local REF_DAYS, REF_GAP = 3, 6 * HOUR
+local function ComputeReference(list)
+  if #list < 6 then return nil end -- (menos de 2 puntos)
+  local last = list[#list - 2]
+  local byDay = {}
+  for i = 1, #list, 3 do
+    local t, min = list[i], list[i + 1]
+    if t <= last - REF_GAP then
+      local day = math.floor(t / DAY)
+      if not byDay[day] or min < byDay[day] then byDay[day] = min end
+    end
+  end
+  local days = {}
+  for day in pairs(byDay) do days[#days + 1] = day end
+  if #days == 0 then return nil end
+  table.sort(days, function(a, b) return a > b end) -- más recientes primero
+  local mins = {}
+  for i = 1, math.min(REF_DAYS, #days) do mins[i] = byDay[days[i]] end
+  table.sort(mins)
+  local n = #mins
+  local ref = n % 2 == 1 and mins[(n + 1) / 2] or (mins[n / 2] + mins[n / 2 + 1]) / 2
+  return ref, n, math.floor(last / DAY) - days[1]
+end
+
+-- Las sumas y comparaciones son las mismas, en el mismo orden, que cuando se
+-- guardaban las filas: los resultados salen idénticos (prueba en auction.lua)
 local function Build(stamp, history, track, pause)
   local now = time()
-  local idx = { stamp = stamp, points = {}, stuck = {}, offers = {} }
+  local items = {}
+  local idx = { stamp = stamp, items = items }
+  local function Item(id)
+    local it = items[id]
+    if not it then it = NewItem() items[id] = it end
+    return it
+  end
+  local points = {} -- [item] = { tiempo, mínimo, cantidad o false, ... } (solo al construir)
   local n = 0
   for _, entry in ipairs(history) do
     if now - entry.time < WINDOW then
       if entry.snap then
-        for id, m, l, q in entry.snap:gmatch(";(%d+):(%d+):(%d+):?%d*:?(%d*)") do
+        for id, m, _, q in entry.snap:gmatch(";(%d+):(%d+):(%d+):?%d*:?(%d*)") do
           id = tonumber(id)
-          local list = idx.points[id]
-          if not list then list = {} idx.points[id] = list end
-          list[#list + 1] = { time = entry.time, min = tonumber(m), listings = tonumber(l), quantity = tonumber(q) }
+          local list = points[id]
+          if not list then list = {} points[id] = list end
+          local k = #list
+          list[k + 1], list[k + 2], list[k + 3] = entry.time, tonumber(m), tonumber(q) or false
           n = n + 1
           if n % 256 == 0 then pause() end
         end
       end
       -- Comparaciones de al menos 15 min (antes 1 h: con escaneos seguidos se tiraban casi todas)
+      -- Estancado: las sumas por objeto, en el orden del historial
       if entry.stuck and entry.elapsed and entry.elapsed >= 15 * 60 then
+        local h = entry.elapsed / HOUR
         for id, r, t in entry.stuck:gmatch(";(%d+):(%d+):(%d+)") do
-          id = tonumber(id)
-          local list = idx.stuck[id]
-          if not list then list = {} idx.stuck[id] = list end
-          list[#list + 1] = { entry.elapsed, tonumber(r), tonumber(t) }
+          r, t = tonumber(r), tonumber(t)
+          if t > 0 then
+            local it = Item(tonumber(id))
+            it[I_HAZARD] = it[I_HAZARD] + t * -math.log(math.max(r / t, MIN_SURVIVAL))
+            it[I_EXPOSURE] = it[I_EXPOSURE] + t * h
+            it[I_HOURS] = it[I_HOURS] + h
+            it[I_REM], it[I_TOT] = it[I_REM] + r, it[I_TOT] + t
+          end
           n = n + 1
           if n % 256 == 0 then pause() end
         end
       end
     end
   end
-  for sig, packed in pairs(track and track.sigs or {}) do
-    local id, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
-    id, count, buyout = tonumber(id), tonumber(count), tonumber(buyout)
-    if buyout > 0 and count > 0 then
-      local _, k = ES.History.Unpack(packed)
-      local list = idx.offers[id]
-      if not list then list = {} idx.offers[id] = list end
-      list[#list + 1] = { buyout / count, count, k }
+  -- Lo que depende del último punto de cada objeto (precio clavado, más oferta, referencia)
+  for id, list in pairs(points) do
+    local it = Item(id)
+    local li = #list - 2 -- (el último punto)
+    local lastT, lastMin, lastQ = list[li], list[li + 1], list[li + 2]
+    it[I_POINTS], it[I_LAST_T], it[I_LAST_MIN], it[I_FIRST_T] = #list / 3, lastT, lastMin, list[1]
+    local since = lastT
+    for i = li - 3, 1, -3 do
+      if math.abs(list[i + 1] - lastMin) > lastMin * PRICE_TOLERANCE then break end
+      since = list[i]
     end
+    it[I_SINCE] = since
+    it[I_LAST_Q] = lastQ
+    if lastQ then
+      for i = li - 3, 1, -3 do
+        if list[i + 2] and lastT - list[i] >= SUPPLY_AGE then
+          it[I_OLD_Q], it[I_OLD_T] = list[i + 2], list[i]
+          break
+        end
+      end
+    end
+    local ref, days, ago = ComputeReference(list)
+    if ref then it[I_REF], it[I_REF_N], it[I_REF_AGO] = ref, days, ago end
+    points[id] = nil
     n = n + 1
-    if n % 256 == 0 then pause() end
+    if n % 64 == 0 then pause() end
   end
+  -- Competencia (subastas del último escaneo): el mínimo por unidad, y después cuántas
+  -- subastas y unidades hay hasta WALL_BAND por encima
+  local function Offer(fn)
+    ES.History.EachSig(track, function(sig, packed)
+      local id, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
+      id, count, buyout = tonumber(id), tonumber(count), tonumber(buyout)
+      if buyout > 0 and count > 0 then fn(Item(id), buyout / count, count, packed) end
+      n = n + 1
+      if n % 256 == 0 then pause() end
+    end)
+  end
+  Offer(function(it, unit)
+    if not it[I_WALL_MIN] or unit < it[I_WALL_MIN] then it[I_WALL_MIN] = unit end
+  end)
+  Offer(function(it, unit, count, packed)
+    if unit <= it[I_WALL_MIN] * WALL_BAND then
+      local _, k = ES.History.Unpack(packed)
+      it[I_WALL_LISTINGS], it[I_WALL_UNITS] = it[I_WALL_LISTINGS] + k, it[I_WALL_UNITS] + count * k
+    end
+  end)
   return idx
 end
 
@@ -186,15 +279,9 @@ end
 -- sale es como mucho el real: si aun así es largo, está estancado de verdad.
 function Market:Stuck(itemID)
   local hazard, exposure, hours, rem, tot = 0, 0, 0, 0, 0
-  for _, c in ipairs(self:Index().stuck[itemID] or {}) do
-    local r, t = c[2], c[3]
-    if t > 0 then
-      local h = c[1] / HOUR
-      hazard = hazard + t * -math.log(math.max(r / t, MIN_SURVIVAL))
-      exposure = exposure + t * h
-      hours = hours + h
-      rem, tot = rem + r, tot + t
-    end
+  local it = self:Index().items[itemID]
+  if it then
+    hazard, exposure, hours, rem, tot = it[I_HAZARD], it[I_EXPOSURE], it[I_HOURS], it[I_REM], it[I_TOT]
   end
   if exposure < STUCK_MIN_EXPOSURE or hours < STUCK_MIN_HOURS then
     return { known = false, rem = rem, tot = tot, hours = hours }
@@ -204,49 +291,33 @@ function Market:Stuck(itemID)
 end
 
 -- Días que lleva el precio mínimo sin moverse (más de un 3%)
-function Market:PriceStuck(points)
-  if #points < 2 then return { known = false } end
-  local last = points[#points]
-  local since = last.time
-  for i = #points - 1, 1, -1 do
-    if math.abs(points[i].min - last.min) > last.min * PRICE_TOLERANCE then break end
-    since = points[i].time
-  end
-  local covered = (last.time - points[1].time) / DAY
+-- (las cuentas se hacen al construir el índice: aquí solo se leen)
+function Market:PriceStuck(itemID)
+  local it = self:Index().items[itemID]
+  if not it or it[I_POINTS] < 2 then return { known = false } end
+  local covered = (it[I_LAST_T] - it[I_FIRST_T]) / DAY
   if covered < PRICE_STUCK_DAYS * 0.5 then return { known = false } end
-  local days = (last.time - since) / DAY
-  return { known = true, flag = days >= PRICE_STUCK_DAYS, days = days, price = last.min }
+  local days = (it[I_LAST_T] - it[I_SINCE]) / DAY
+  return { known = true, flag = days >= PRICE_STUCK_DAYS, days = days, price = it[I_LAST_MIN] }
 end
 
 -- Unidades a la venta ahora frente a hace ~1 día
-function Market:Supply(points)
-  local last = points[#points]
-  if not last or not last.quantity then return { known = false } end
-  local old
-  for i = #points - 1, 1, -1 do
-    if points[i].quantity and last.time - points[i].time >= SUPPLY_AGE then old = points[i] break end
-  end
-  if not old then return { known = false } end
-  local growth = (last.quantity - old.quantity) / math.max(old.quantity, 1)
-  return { known = true, flag = growth >= SUPPLY_GROWTH and last.quantity - old.quantity >= SUPPLY_MIN_UNITS,
-    from = old.quantity, to = last.quantity, growth = growth, hours = (last.time - old.time) / HOUR }
+function Market:Supply(itemID)
+  local it = self:Index().items[itemID]
+  if not it or not it[I_LAST_Q] or not it[I_OLD_Q] then return { known = false } end
+  local from, to = it[I_OLD_Q], it[I_LAST_Q]
+  local growth = (to - from) / math.max(from, 1)
+  return { known = true, flag = growth >= SUPPLY_GROWTH and to - from >= SUPPLY_MIN_UNITS,
+    from = from, to = to, growth = growth, hours = (it[I_LAST_T] - it[I_OLD_T]) / HOUR }
 end
 
 -- Subastas apiñadas en el precio mínimo del último escaneo
 function Market:Wall(itemID)
-  local offers = self:Index().offers[itemID]
-  if not offers then return { known = false } end
-  local min
-  for _, o in ipairs(offers) do
-    if not min or o[1] < min then min = o[1] end
-  end
-  local listings, units = 0, 0
-  for _, o in ipairs(offers) do
-    if o[1] <= min * WALL_BAND then
-      listings, units = listings + o[3], units + o[2] * o[3]
-    end
-  end
-  return { known = true, flag = listings >= WALL_LISTINGS, listings = listings, units = units, price = min }
+  local it = self:Index().items[itemID]
+  if not it or not it[I_WALL_MIN] then return { known = false } end
+  local listings = it[I_WALL_LISTINGS]
+  return { known = true, flag = listings >= WALL_LISTINGS, listings = listings, units = it[I_WALL_UNITS],
+    price = it[I_WALL_MIN] }
 end
 
 ---------------------------------------------------------------------------
@@ -259,47 +330,16 @@ end
 -- la referencia, se vende a referencia x PREMIUM (algo más por la falta de
 -- existencias, pero un precio que se acepta), nunca por encima del mínimo actual.
 ---------------------------------------------------------------------------
-local REF_DAYS, REF_GAP = 3, 6 * HOUR
 local INFLATED, PREMIUM, DEFLATED = 1.5, 1.15, 1 / 1.5
 local TSM_SUPPORTS = 0.9 -- venta media de TSM de al menos un 90% del mínimo de ahora: la subida es real
 Market.INFLATED, Market.PREMIUM, Market.TSM_SUPPORTS = INFLATED, PREMIUM, TSM_SUPPORTS
 
 -- Devuelve referencia, nº de días usados y hace cuántos días es el más reciente
--- Se guarda por escaneo (en el índice): los planes la piden muchas veces por objeto
-local NO_REF = {}
+-- (calculada al construir el índice: ComputeReference, arriba)
 function Market:ReferencePrice(itemID)
-  local index = self:Index()
-  index.refs = index.refs or {}
-  local memo = index.refs[itemID]
-  if memo then
-    if memo == NO_REF then return nil end
-    return memo[1], memo[2], memo[3]
-  end
-  local ref, n, ago = self:ComputeReference(index.points[itemID])
-  index.refs[itemID] = ref and { ref, n, ago } or NO_REF
-  return ref, n, ago
-end
-
-function Market:ComputeReference(points)
-  if not points or #points < 2 then return nil end
-  local last = points[#points].time
-  local byDay = {}
-  for _, p in ipairs(points) do
-    if p.time <= last - REF_GAP then
-      local day = math.floor(p.time / DAY)
-      if not byDay[day] or p.min < byDay[day] then byDay[day] = p.min end
-    end
-  end
-  local days = {}
-  for day in pairs(byDay) do days[#days + 1] = day end
-  if #days == 0 then return nil end
-  table.sort(days, function(a, b) return a > b end) -- más recientes primero
-  local mins = {}
-  for i = 1, math.min(REF_DAYS, #days) do mins[i] = byDay[days[i]] end
-  table.sort(mins)
-  local n = #mins
-  local ref = n % 2 == 1 and mins[(n + 1) / 2] or (mins[n / 2] + mins[n / 2 + 1]) / 2
-  return ref, n, math.floor(last / DAY) - days[1]
+  local it = self:Index().items[itemID]
+  if not it or not it[I_REF] then return nil end
+  return it[I_REF], it[I_REF_N], it[I_REF_AGO]
 end
 
 -- { price, current, ref, days, ago, inflated, deflated, noHistory } para vender ahora.
@@ -433,11 +473,10 @@ Market.SIGNALS = 3   -- estancado, precio clavado, más oferta (+ demanda de TSM
 
 -- Todas las señales de un objeto y el veredicto: good, watch, avoid o unknown
 function Market:Signals(itemID)
-  local points = self:Index().points[itemID] or {}
   local s = {
     stuck = self:Stuck(itemID),
-    price = self:PriceStuck(points),
-    supply = self:Supply(points),
+    price = self:PriceStuck(itemID),
+    supply = self:Supply(itemID),
     wall = self:Wall(itemID),   -- solo dato
     demand = self:Demand(itemID),
   }

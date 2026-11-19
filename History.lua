@@ -15,7 +15,9 @@ local L = ES.L
 --
 -- ES.db.history[reino]: lista de { time, elapsed (s desde el escaneo anterior;
 --   0 si no se pudo comparar), snap, stuck }
--- ES.db.track[reino]: { time, sigs } subastas del último escaneo por firma
+-- ES.db.track[reino]: { time, v = 3, packed } subastas del último escaneo por firma,
+--   en una cadena (History.Pack; antes v = 2 con sigs = { [firma] = número }, que se
+--   sigue leyendo: History.EachSig)
 
 local History = {}
 ES.History = History
@@ -48,9 +50,11 @@ function History:IsTracked(itemID)
   return tracked[itemID]
 end
 
--- Firma de una subasta: objeto, cantidad, precio de compra y vendedor ("?" si no se sabe)
+-- Firma de una subasta: objeto, cantidad, precio de compra y vendedor ("?" si no se sabe).
+-- Sin ":", ";" ni "=" en el vendedor: separan las firmas guardadas (History.Pack)
 function History.Signature(itemID, count, buyout, owner)
-  return itemID .. ":" .. count .. ":" .. (buyout or 0) .. ":" .. (owner or "?")
+  owner = owner and (tostring(owner):gsub("[:;=]", "?")) or "?"
+  return itemID .. ":" .. count .. ":" .. (buyout or 0) .. ":" .. owner
 end
 
 -- Por cada firma guardamos cuántas subastas hay en cada categoría de tiempo
@@ -75,6 +79,27 @@ function History.Unpack(packed)
     total = total + counts[b]
   end
   return counts, total
+end
+
+-- Las subastas de un escaneo ([firma] = número) en una sola cadena, como se guardan
+-- (v = 3). El número cabe sin exponente: como mucho 999.999.999.999 (AddAuction)
+function History.Pack(sigs)
+  local parts = {}
+  for sig, packed in pairs(sigs) do parts[#parts + 1] = sig .. "=" .. packed end
+  return ";" .. table.concat(parts, ";")
+end
+
+-- Recorre las subastas del último escaneo de un reino (ES.db.track[reino]):
+-- fn(firma, número empaquetado). Entiende los dos formatos guardados:
+--   v = 3: packed = ";firma=número;firma=número..." (una sola cadena)
+--   antes: sigs = { [firma] = número } (una clave por firma: ~5 MB con 60.000)
+function History.EachSig(track, fn)
+  if type(track) ~= "table" then return end
+  if type(track.packed) == "string" then
+    for sig, packed in track.packed:gmatch(";([^;=]+)=(%d+)") do fn(sig, tonumber(packed)) end
+  elseif type(track.sigs) == "table" then
+    for sig, packed in pairs(track.sigs) do fn(sig, tonumber(packed) or 0) end
+  end
 end
 
 -- Entradas del historial de un reino (de la más antigua a la más nueva)
@@ -110,25 +135,26 @@ function History:Record(key, sigs, snap, now)
   ES.db.track = ES.db.track or {}
   local history = self:Entries(key)
   local prev = ES.db.track[key]
-  ES.db.track[key] = { time = now, sigs = sigs, v = 2 }
-  if prev and prev.v ~= 2 then prev = nil end -- formato antiguo: no comparable
+  -- (empaquetadas en una cadena: una tabla con una clave por firma ocupaba ~5 MB)
+  ES.db.track[key] = { time = now, packed = History.Pack(sigs), v = 3 }
+  if prev and prev.v ~= 2 and prev.v ~= 3 then prev = nil end -- formato antiguo: no comparable
 
   local entry = { time = now, elapsed = 0, snap = snap }
   local elapsed = prev and (now - prev.time) or 0
   if prev and elapsed > 0 and elapsed <= MAX_GAP then
     -- Precio por unidad más barato de cada objeto en el escaneo anterior
     local minUnit = {}
-    for sig in pairs(prev.sigs) do
+    History.EachSig(prev, function(sig)
       local item, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
       count, buyout = tonumber(count), tonumber(buyout)
       if buyout > 0 and count > 0 and (not minUnit[item] or buyout / count < minUnit[item]) then
         minUnit[item] = buyout / count
       end
-    end
+    end)
     -- De las más baratas, cuántas siguen. Las que siguen no se han vendido; las
     -- que faltan pudieron venderse, caducar o retirarse (no se cuentan como nada)
     local rem, tot = {}, {}
-    for sig, packed in pairs(prev.sigs) do
+    History.EachSig(prev, function(sig, packed)
       local item, count, buyout = sig:match("^(%d+):(%d+):(%d+):")
       count, buyout = tonumber(count), tonumber(buyout)
       if buyout > 0 and count > 0 and buyout / count <= minUnit[item] * STUCK_BAND then
@@ -144,7 +170,7 @@ function History:Record(key, sigs, snap, now)
         tot[item] = (tot[item] or 0) + prevTotal
         rem[item] = (rem[item] or 0) + remaining
       end
-    end
+    end)
     local parts = {}
     for item, n in pairs(tot) do parts[#parts + 1] = item .. ":" .. rem[item] .. ":" .. n end
     entry.stuck = ";" .. table.concat(parts, ";")

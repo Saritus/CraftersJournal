@@ -108,6 +108,74 @@ function Fixtures.State(name)
   return db
 end
 
+-- Historial de mercado grande y siempre igual (pruebas de memoria y del índice de
+-- Market.lua): `scans` escaneos de `items` objetos repartidos en ~6,5 días, con
+-- "baratas que siguen", y un último escaneo con unas `auctions` subastas en ES.db.track
+-- (formato v = 2, una clave por firma). Escribe en ES.db.history/track del reino y
+-- devuelve la lista de objetos. Casos límite según el objeto (j % 10):
+--   0 sin cantidad   1 un solo punto (solo en el último escaneo)
+--   2 solo en las últimas ~3 h (todo dentro de REF_GAP)   3 mínimo que no se mueve
+--   4 cada vez más oferta   5 las baratas siguen todas   6 no está en la AH ahora
+-- Además: una entrada de hace 8 días (fuera de la semana) y la segunda con 10 min
+-- desde la anterior (no cuenta para "estancado")
+function Fixtures.BigMarket(scans, items, auctions)
+  local seed = 12345
+  local function rnd(n) seed = (seed * 16807) % 2147483647 return seed % n end
+  local key = ES:RealmKey()
+  local DAY = 86400
+  local gap = math.floor(6.5 * DAY / scans)
+  local ids = {}
+  for j = 1, items do ids[j] = 100000 + j end
+  local history = { { time = NOW - 8 * DAY, elapsed = 0, snap = ";" .. ids[1] .. ":50:3:50:10" } }
+  for i = 1, scans do
+    local t = NOW - (scans - i) * gap
+    local snap, stuck = {}, {}
+    for j, id in ipairs(ids) do
+      local kind = j % 10
+      local show = true
+      if kind == 1 then show = i == scans end
+      if kind == 2 then show = NOW - t <= 3 * 3600 end
+      if show then
+        local base = 20 + (j % 97) * 3
+        local min = kind == 3 and base or base + rnd(base)
+        local listings = 1 + rnd(12)
+        local qty = kind == 4 and (10 + i * 15) or (5 + rnd(60))
+        if kind == 0 then
+          snap[#snap + 1] = id .. ":" .. min .. ":" .. listings
+        else
+          snap[#snap + 1] = id .. ":" .. min .. ":" .. listings .. ":" .. (min + rnd(10)) .. ":" .. qty
+        end
+        if i > 1 then
+          local tot = 1 + rnd(8)
+          local rem = kind == 5 and tot or rnd(tot + 1)
+          stuck[#stuck + 1] = id .. ":" .. rem .. ":" .. tot
+        end
+      end
+    end
+    local entry = { time = t, elapsed = 0, snap = ";" .. table.concat(snap, ";") }
+    if i > 1 then
+      entry.elapsed = i == 2 and 600 or gap
+      entry.stuck = ";" .. table.concat(stuck, ";")
+    end
+    history[#history + 1] = entry
+  end
+  local sigs = {}
+  local S = ES.History
+  for a = 1, auctions do
+    local j = 1 + rnd(items)
+    if j % 10 == 6 then j = j + 1 end
+    if j > items then j = 1 end
+    local count = 1 + rnd(20)
+    local buyout = a % 13 == 0 and 0 or count * (20 + (j % 97) * 3 + rnd(80))
+    S.AddAuction(sigs, S.Signature(ids[j], count, buyout, "?"), 1 + rnd(4))
+  end
+  ES.db.history = ES.db.history or {}
+  ES.db.history[key] = history
+  ES.db.track = ES.db.track or {}
+  ES.db.track[key] = { time = NOW, sigs = sigs, v = 2 }
+  return ids
+end
+
 -- Lo que se monta con el addon ya arrancado (usa sus propias funciones)
 function Fixtures.After(name)
   if name ~= "full" then return end

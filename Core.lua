@@ -174,9 +174,38 @@ local GetItemInfoCompat = (C_Item and C_Item.GetItemInfo) or GetItemInfo
 local GetItemInfoInstantCompat = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
 
 -- Nombres de recetas y objetos de un idioma (Data/Names_esES.lua, _deDE, _frFR; los
--- genera tools/gen_names.py): { spells, items }, o nil (inglés: los de los datos)
+-- genera tools/gen_names.py): { spells, items }, o nil (inglés: los de los datos).
+-- Cada archivo los deja como una sola cadena ("S<receta>=nombre" / "I<objeto>=nombre",
+-- una por línea), que ocupa ~3 veces menos que la tabla: se convierte en tabla la
+-- primera vez que se pide el idioma, y solo se quedan convertidos los que se usan (el
+-- del addon y el del cliente: ES.ReleaseUnusedNames). Un jugador en inglés no
+-- convierte ninguno.
+local expandedNames = {} -- [idioma] = { spells, items }
 function ES.NamesFor(lang)
-  return ES.Data.Names and ES.Data.Names[lang]
+  local set = expandedNames[lang]
+  if set then return set end
+  local raw = ES.Data.Names and ES.Data.Names[lang]
+  if type(raw) ~= "string" then return raw end
+  set = { spells = {}, items = {} }
+  local spells, items = set.spells, set.items
+  for line in raw:gmatch("[^\n]+") do
+    local kind, id, name = line:match("^([SI])(%d+)=(.*)$")
+    if kind == "S" then spells[tonumber(id)] = name elseif kind == "I" then items[tonumber(id)] = name end
+  end
+  expandedNames[lang] = set
+  return set
+end
+
+-- ¿Está convertido en tabla ese idioma? (pruebas y /cj mem)
+function ES.NamesExpanded(lang) return expandedNames[lang] ~= nil end
+
+-- Suelta los idiomas convertidos que ya no se usan (ni el del addon ni el del cliente):
+-- vuelven a ocupar solo su cadena. Al cambiar de idioma (ES:SetLanguage)
+function ES.ReleaseUnusedNames()
+  local client = ES.DefaultLanguage()
+  for lang in pairs(expandedNames) do
+    if lang ~= ES.lang and lang ~= client then expandedNames[lang] = nil end
+  end
 end
 
 -- Nombre de un objeto en el idioma del addon según los datos propios (Data/Names_*.lua)

@@ -84,7 +84,8 @@ test("nombres de los datos: de recetas que existen y sin vacíos", function()
   for _, prof in ipairs(ProfessionKeys()) do
     for id in pairs(ES.Data[prof].recipes) do recipes[id] = true end
   end
-  for lang, set in pairs(ES.Data.Names) do
+  for _, lang in ipairs({ "es", "de", "fr" }) do
+    local set = expect(ES.NamesFor(lang), "sin nombres en %s", lang)
     local orphan, empty, ns, ni = {}, {}, 0, 0
     for id, name in pairs(set.spells or {}) do
       ns = ns + 1
@@ -100,6 +101,132 @@ test("nombres de los datos: de recetas que existen y sin vacíos", function()
     expect(#empty == 0, "%s: nombres vacíos: %s", lang, table.concat(empty, ", "):sub(1, 400))
     expect(#orphan == 0, "%s: nombres de recetas que no están en los datos: %s", lang, table.concat(Sorted(orphan), ", "):sub(1, 400))
   end
+end, { boot = false })
+
+-- Huella de todos los nombres de un idioma: cuántos y un número que cambia si cambia
+-- cualquier letra (sin guardar 18.000 nombres en la instantánea)
+local function NamesDigest(set)
+  local lines = {}
+  for id, name in pairs(set.spells) do lines[#lines + 1] = "S" .. id .. "=" .. name end
+  for id, name in pairs(set.items) do lines[#lines + 1] = "I" .. id .. "=" .. name end
+  table.sort(lines)
+  local s = table.concat(lines, "\n")
+  local h = 0
+  for i = 1, #s do h = (h * 31 + s:byte(i)) % 2147483647 end
+  return { n = #lines, hash = h }
+end
+
+test("nombres de cada idioma: los mismos que antes", function()
+  local out = {}
+  for _, lang in ipairs({ "es", "de", "fr" }) do out[lang] = NamesDigest(ES.NamesFor(lang)) end
+  snapshot("nombres", out)
+  note("es %d, de %d, fr %d nombres", out.es.n, out.de.n, out.fr.n)
+  expect_eq(ES.NamesFor("es").spells[12720], 'Caja goblin "Bum"', "nombre con comillas")
+  expect_eq(ES.NamesFor("de").spells[12720], 'Goblin-"Bumm"-Kasten', "nombre con comillas en alemán")
+end, { boot = false })
+
+local function KB()
+  collectgarbage("collect")
+  collectgarbage("collect")
+  return collectgarbage("count")
+end
+
+test("nombres: con el juego y el addon en inglés, los idiomas sin usar ocupan poco", function()
+  GetLocale = function() return "enUS" end
+  Boot({ lang = "en" })
+  -- Al entrar no se ha convertido ninguno
+  for _, lang in ipairs({ "es", "de", "fr" }) do
+    expect(ES.NamesExpanded and not ES.NamesExpanded(lang), "%s convertido sin usarse", lang)
+  end
+  -- Lo que ocupan sin convertir (cadenas) frente a lo que ocupan convertidos
+  local compact = 0
+  for _, v in pairs(ES.Data.Names) do
+    compact = compact + (type(v) == "string" and #v + 24 or math.huge)
+  end
+  local before = KB()
+  for _, lang in ipairs({ "es", "de", "fr" }) do ES.NamesFor(lang) end
+  local tables = KB() - before
+  note("sin convertir %.2f MB; convertidos %.2f MB", compact / 1048576, tables / 1024)
+  expect(compact <= 0.4 * tables * 1024, "sin convertir ocupan %.2f MB y convertidos %.2f MB (tope 40 %%)",
+    compact / 1048576, tables / 1024)
+end, { boot = false })
+
+test("nombres: solo Core.lua lee ES.Data.Names (los demás, con ES.NamesFor)", function()
+  local bad = {}
+  for _, f in ipairs(TOC_FILES) do
+    if f ~= "Core.lua" and not f:match("^Data") and not f:match("^Libs") and ReadFile(f):find("Data%.Names") then
+      bad[#bad + 1] = f
+    end
+  end
+  expect(#bad == 0, "leen ES.Data.Names directamente (es una cadena): %s", table.concat(bad, ", "))
+end, { boot = false })
+
+test("cambiar de idioma: se convierte el nuevo y se suelta el anterior", function()
+  GetLocale = function() return "enUS" end
+  Boot({ lang = "fr" })
+  OpenPage("Leatherworking")
+  expect(ES.NamesExpanded("fr"), "el francés, en uso, no está convertido")
+  ES:SetLanguage("de")
+  RunTimers()
+  local de = ES.NamesFor("de").spells[2149]
+  expect(de, "sin nombre en alemán para la receta 2149")
+  expect_eq(ES.Data.Leatherworking.recipes[2149].name, de, "receta en alemán")
+  expect(ES:GetMainFrame():IsShown(), "al cambiar de idioma la ventana se cerró")
+  expect(ES.NamesExpanded("de"), "el alemán no está convertido")
+  expect(not ES.NamesExpanded("fr"), "el francés sigue convertido tras dejarlo")
+  expect(not ES.NamesExpanded("es"), "el español se convirtió sin usarse")
+  -- Cuánto cuesta convertir un idioma (lo que tarda de más el cambio)
+  local start = os.clock()
+  ES.NamesFor("fr")
+  local ms = (os.clock() - start) * 1000
+  ES.ReleaseUnusedNames()
+  expect(not ES.NamesExpanded("fr"), "no se suelta el francés")
+  note("convertir el francés: %.1f ms (en el Lua de las pruebas)", ms)
+  expect(ms < 200, "convertir un idioma tarda %.0f ms", ms)
+end, { boot = false })
+
+test("volver al idioma del cliente: se queda convertido y se suelta el otro", function()
+  GetLocale = function() return "esES" end
+  Boot({ lang = "de" })
+  OpenMain()
+  ES:SetLanguage("es")
+  RunTimers()
+  expect_eq(ES.Data.Leatherworking.recipes[2149].name, ES.NamesFor("es").spells[2149], "receta en español")
+  expect(ES.NamesExpanded("es"), "el español (el del cliente) no está convertido")
+  expect(not ES.NamesExpanded("de"), "el alemán sigue convertido tras dejarlo")
+end, { boot = false })
+
+test("instructor en el idioma del cliente con el addon en otro: reconoce las recetas", function()
+  GetLocale = function() return "frFR" end
+  Boot({ lang = "es" })
+  -- Dos recetas de Sastrería que el instructor enseña por su nombre en francés (sin enlace)
+  local fr = ES.NamesFor("fr").spells
+  local recipes = {}
+  for id, r in pairs(ES.Data.Tailoring.recipes) do
+    if r.fee and fr[id] and #recipes < 2 then recipes[#recipes + 1] = { id = id, r = r } end
+  end
+  expect_eq(#recipes, 2, "recetas de prueba")
+  local services = {}
+  for i, x in ipairs(recipes) do
+    services[i] = { name = fr[x.id], kind = "available", cost = 1234 + i, skill = x.r.train or 1 }
+  end
+  GetNumTrainerServices = function() return #services end
+  GetTrainerServiceInfo = function(i) local s = services[i] return s.name, "", s.kind end
+  GetTrainerServiceCost = function(i) return services[i].cost end
+  GetTrainerServiceSkillReq = function(i) return "Tailoring", services[i].skill, true end
+  GetTrainerServiceSkillLine = function() return ES:ProfLabel("Tailoring") end
+  GetTrainerServiceItemLink = function() return nil end
+  GetTrainerServiceTypeFilter = function() return true end
+  SetTrainerServiceTypeFilter = function() end
+  FireEvent("TRAINER_SHOW")
+  RunTimers()
+  local fees = ES.db.trainerFees or {}
+  for _, x in ipairs(recipes) do
+    expect(fees[x.id], "no reconoce «%s» (%d) por su nombre en francés", fr[x.id], x.id)
+  end
+  FireEvent("TRAINER_CLOSED")
+  expect(ES.NamesExpanded("fr") and ES.NamesExpanded("es"), "el francés y el español deben estar convertidos")
+  expect(not ES.NamesExpanded("de"), "el alemán se convirtió sin usarse")
 end, { boot = false })
 
 test("cambiar de idioma: textos, recetas y números", function()

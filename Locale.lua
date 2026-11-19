@@ -78,6 +78,7 @@ function ES:SetLanguage(lang)
   self.db.lang = lang
   ES.ApplyLocalization()
   self:LocalizeRecipeNames()
+  if self.ReleaseUnusedNames then self.ReleaseUnusedNames() end -- (el idioma anterior, si ya no se usa)
   if self.ClearHomeCache then self:ClearHomeCache() end
   if self.RebuildMainFrame then self:RebuildMainFrame() end
 end

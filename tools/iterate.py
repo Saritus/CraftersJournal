@@ -328,7 +328,7 @@ step("G. SavedVariables serializables y tamaÃ±o tras muchos escaneos", functio
   log("      tamaÃ±o actual aprox: %.0f KB", Size(CraftersJournalDB, {}, 0) / 1024)
   local track = ES.db.track[ES:RealmKey()]
   local n = 0
-  for _ in pairs(track.sigs) do n = n + 1 end
+  ES.History.EachSig(track, function() n = n + 1 end)
   log("      firmas de seguimiento del Ãºltimo escaneo: %d", n)
   -- simular 100 escaneos mÃ¡s cada 30 min
   local base2 = BuildAuctions()
