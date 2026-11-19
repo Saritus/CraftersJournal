@@ -921,6 +921,7 @@ ES.Locales.de = {
   ["Para vender en la AH, de tus bolsas:"] = "Im AH verkaufen, aus deinen Taschen:",
   ["Anuncias %d × %s · %d h"] = "Du stellst %d × %s ein · %d h",
   ["La Casa de Subastas no aceptó %s: %s"] = "Das Auktionshaus hat %s nicht angenommen: %s",
+  ["La Casa de Subastas no confirmó el anuncio de %s: míralo en Subastas."] = "Das Auktionshaus hat die Auktion von %s nicht bestätigt: sieh unter Auktionen nach.",
   ["No compensa venderlo ahora"] = "Lohnt sich gerade nicht zu verkaufen",
   ["Lista de compra:"] = "Einkaufsliste:",
   ["Tu ruta ya usa tu último escaneo de la AH (de hace %d min). Cuando escanees otra vez, aquí aplicas los precios nuevos."] = "Deine Route nutzt bereits deinen letzten AH-Scan (vor %d Min.). Nach deinem nächsten Scan übernimmst du die neuen Preise hier.",

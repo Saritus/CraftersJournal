@@ -72,7 +72,7 @@ function Sell.Post(itemID, n, unit, hours, done, warn)
     key = "noPostConfirm", title = L["Anunciar en la Casa de Subastas"],
     text = string.format(L["¿Anunciar %d × %s a %s cada uno (%d h)?"], n,
       (ES.UI.ItemLabel(itemID, "#" .. itemID)), ES.Money(ES.Ledger.PostPrice(unit)), hours or 24),
-    warn = warn, onYes = Post,
+    warn = warn, onYes = Post, closeOn = "AUCTION_HOUSE_CLOSED",
   })
 end
 

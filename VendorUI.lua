@@ -395,7 +395,7 @@ local function CreatePanel()
     if n == 0 then return end
     ES:Confirm({ key = "noBuyAllConfirm", title = L["Comprar todo"],
       text = string.format(L["¿Comprar %d materiales de la lista de compra por %s?"], n, ES.Money(total)),
-      onYes = function() Vendor:BuyAll() end })
+      closeOn = "MERCHANT_CLOSED", onYes = function() Vendor:BuyAll() end })
   end)
   f.sellAll = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   f.sellAll:SetSize(WIDTH - 24, 24)
@@ -406,6 +406,7 @@ local function CreatePanel()
     for _, e in ipairs(list) do total = total + e.value end
     ES:Confirm({ key = "noSellAllConfirm", title = L["Vender todo"],
       text = string.format(L["¿Vender %d objetos al vendedor por %s?"], #list, ES.Money(total)),
+      closeOn = "MERCHANT_CLOSED",
       onYes = function()
         ES:Print(string.format(L["Vendiendo %d objetos por %s..."], #list, ES.Money(total)))
         Vendor:Sell(list)

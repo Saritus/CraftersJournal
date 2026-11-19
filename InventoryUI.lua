@@ -589,9 +589,15 @@ function ES:CreateInventoryPage(page)
     -- Pregunta antes (ES:Confirm, UI.lua; se quita con su casilla o en /cj opciones, Inventario)
     ES:Confirm({ key = "noInventorySellConfirm", title = L["Vender al vendedor"],
       text = string.format(L["¿Vender %d objetos al vendedor por %s?"], #list, ES.Money(total)),
+      closeOn = "MERCHANT_CLOSED",
       onYes = function()
-        for _, e in ipairs(list) do ES.Ledger:SellToVendor(e.itemID, e.vendorN) end
-        ES:Print(string.format(L["Vendidos %d objetos al vendedor."], #list))
+        -- "Vendidos" con los que de verdad se pusieron a la venta (sin vendedor: ninguno)
+        local n = 0
+        for _, e in ipairs(list) do
+          if (ES.Ledger:SellToVendor(e.itemID, e.vendorN) or 0) > 0 then n = n + 1 end
+        end
+        if n == 0 then return end
+        ES:Print(string.format(L["Vendidos %d objetos al vendedor."], n))
         C_Timer.After(0.8, function() ES:RenderInventory() end)
       end })
   end)

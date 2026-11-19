@@ -1032,8 +1032,9 @@ function Ledger:PostOnAH(itemID, n, unit, hours)
     name = ES:DataItemName(itemID) or tostring(itemID) }
   Ledger.pendingPost = p
   C_Timer.After(POST_CONFIRM_WAIT, function()
-    -- Sin confirmación ni error (el cliente no avisa): se da por hecho, como antes
-    if Ledger.pendingPost == p then Ledger:ConfirmPost(true) end
+    -- Sin confirmación ni error: NO se da por hecho (GitHub #6: un anuncio bloqueado
+    -- salía como "Anunciados"). Se dice que no hubo respuesta, para mirarlo en la AH
+    if Ledger.pendingPost == p then Ledger:ConfirmPost(nil) end
   end)
   return qty
 end
@@ -1053,13 +1054,16 @@ function Ledger.IsAuctionError(message)
   return auctionErrors[message] == true
 end
 
--- Respuesta de la AH al último anuncio: ok (creado) o el mensaje de error
+-- Respuesta de la AH al último anuncio: ok (creado), false y el mensaje de error, o nil
+-- (sin respuesta a tiempo: no se sabe si se anunció)
 function Ledger:ConfirmPost(ok, message)
   local p = Ledger.pendingPost
   if not p then return end
   Ledger.pendingPost = nil
   if ok then
     ES:Print(p.text)
+  elseif ok == nil then
+    ES:Print(string.format(L["La Casa de Subastas no confirmó el anuncio de %s: míralo en Subastas."], p.name))
   else
     ES:Print(string.format(L["La Casa de Subastas no aceptó %s: %s"], p.name, tostring(message or "?")))
   end

@@ -921,6 +921,7 @@ ES.Locales.en = {
   ["Para vender en la AH, de tus bolsas:"] = "To sell on the AH, from your bags:",
   ["Anuncias %d × %s · %d h"] = "You list %d × %s · %d h",
   ["La Casa de Subastas no aceptó %s: %s"] = "The Auction House didn't accept %s: %s",
+  ["La Casa de Subastas no confirmó el anuncio de %s: míralo en Subastas."] = "The Auction House didn't confirm the listing of %s: check it under Auctions.",
   ["No compensa venderlo ahora"] = "Not worth selling now",
   ["Lista de compra:"] = "Shopping list:",
   ["Tu ruta ya usa tu último escaneo de la AH (de hace %d min). Cuando escanees otra vez, aquí aplicas los precios nuevos."] = "Your route already uses your latest AH scan (%d min ago). After your next scan, apply the new prices here.",

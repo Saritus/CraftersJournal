@@ -743,7 +743,8 @@ end
 -- opción de ese aviso (ES.db[opts.key] = true); se vuelve a encender en /cj opciones,
 -- en la categoría de esa acción. CurseForge: un clic sin querer anunció o vendió de golpe.
 --   opts = { key, title, text, warn (aviso en naranja, opcional), yes (texto del botón,
---            opcional), onYes = función }
+--            opcional), onYes = función, closeOn = "MERCHANT_CLOSED" o
+--            "AUCTION_HOUSE_CLOSED" (opcional: se cierra con esa ventana) }
 -- La acción sale del clic en Sí: vender, comprar y anunciar piden un clic del jugador
 ---------------------------------------------------------------------------
 local confirm
@@ -789,17 +790,30 @@ local function ConfirmDialog()
   d.cancel:SetSize(120, 24)
   d.cancel:SetPoint("BOTTOMLEFT", d, "BOTTOM", 4, 18)
   d.cancel:SetScript("OnClick", function() d.pending = nil d:Hide() end)
+  -- La acción va lo PRIMERO del clic, antes de esconder el diálogo (con el botón que se
+  -- acaba de pulsar) o de guardar la casilla: el anuncio en la AH pide el clic del
+  -- jugador y, hecho después del Hide, el juego lo bloqueaba (GitHub #6: "ADDON BLOCKED"
+  -- al pulsar Sí; sin el diálogo, anunciaba)
   d.ok:SetScript("OnClick", function()
     local p = d.pending
     d.pending = nil
+    if p then p.onYes() end
     d:Hide()
-    if not p then return end
-    if d.check:GetChecked() then
+    if p and d.check:GetChecked() then
       ES.db[p.key] = true
       ES:Print(string.format(L["Ya no se mostrará este aviso. Se vuelve a activar en /cj opciones (%s)."],
         ES.OptionLabel and ES.OptionLabel(p.key) or p.key))
     end
-    p.onYes()
+  end)
+  -- Se cierra solo si se cierra el vendedor o la AH de la que es (opts.closeOn): pulsar
+  -- Sí después no hacía nada y el Inventario decía "Vendidos" igualmente
+  d:RegisterEvent("MERCHANT_CLOSED")
+  d:RegisterEvent("AUCTION_HOUSE_CLOSED")
+  d:SetScript("OnEvent", function(_, event)
+    if d.pending and d.pending.closeOn == event then
+      d.pending = nil
+      d:Hide()
+    end
   end)
   d:Hide()
   return d

@@ -921,6 +921,7 @@ ES.Locales.fr = {
   ["Para vender en la AH, de tus bolsas:"] = "À vendre à l'HV, depuis vos sacs :",
   ["Anuncias %d × %s · %d h"] = "Vous mettez en vente %d × %s · %d h",
   ["La Casa de Subastas no aceptó %s: %s"] = "L'hôtel des ventes n'a pas accepté %s : %s",
+  ["La Casa de Subastas no confirmó el anuncio de %s: míralo en Subastas."] = "L'hôtel des ventes n'a pas confirmé la mise en vente de %s : vérifiez dans Enchères.",
   ["No compensa venderlo ahora"] = "Pas rentable à vendre maintenant",
   ["Lista de compra:"] = "Liste de courses :",
   ["Tu ruta ya usa tu último escaneo de la AH (de hace %d min). Cuando escanees otra vez, aquí aplicas los precios nuevos."] = "Votre parcours utilise déjà votre dernière analyse de l'HV (il y a %d min). Après votre prochaine analyse, appliquez les nouveaux prix ici.",
