@@ -722,8 +722,10 @@ function WP.Target(kind, a, b)
   end
 end
 
--- Añade al tooltip "Más cercano: nombre / zona" y qué hace el clic
+-- Añade al tooltip "Más cercano: nombre / zona" y qué hace el clic. Sin `pick` (una
+-- fila que no lleva a ninguna parte), nada: ni el PNJ ni "Clic: marcar el camino"
 function WP.AddToTooltip(label, pick)
+  if type(pick) ~= "function" then return end
   GameTooltip:AddLine(" ")
   if not WP.Available() then
     GameTooltip:AddLine(L["Instala Questie para ver dónde está y marcar el camino."], 0.6, 0.6, 0.6, true)

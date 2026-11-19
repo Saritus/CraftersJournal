@@ -83,16 +83,32 @@ Earn.VENDOR_TIME_BUDGET = 20 * 60 -- s de fabricar como mucho en una línea de v
 -- misma cuenta que las rutas (Planner.CraftSeconds)
 function Earn.CraftSeconds(recipeID) return ES.Planner.CraftSeconds(recipeID) end
 
+-- Segundos de fabricar `crafts` de una idea con sus acciones (Planner.RecipeCost): sus
+-- fabricaciones por su tiempo, y por cada intermedio que haces por el camino, SUS
+-- fabricaciones (unidades entre las que da cada una, hacia arriba) por el tiempo de SU
+-- receta (a.recipe es su id). Antes se sumaban las unidades con el tiempo de la receta
+-- final: 20 Bolt que salen de 10 fabricaciones contaban como 20 de la receta final
+local function IdeaSeconds(idea, crafts, actions)
+  local secs = idea.craftSecs or Earn.CraftSeconds(idea.e.id)
+  local recipes = idea.ctx and idea.ctx.data and idea.ctx.data.recipes or {}
+  local total = (crafts or 0) * secs
+  for _, a in ipairs(actions or {}) do
+    if a.kind == "craft" and a.item ~= idea.itemID and (a.qty or 0) > 0 then
+      local r = a.recipe and recipes[a.recipe]
+      local per = math.max(1, r and r.out and r.out[2] or 1)
+      local n = math.ceil(a.qty / per - 1e-6)
+      total = total + n * (r and Earn.CraftSeconds(a.recipe) or secs)
+    end
+  end
+  return total
+end
+Earn.IdeaSeconds = IdeaSeconds -- para pruebas
+
 -- Tiempo de fabricar una idea (sus fabricaciones y las de lo intermedio que haces
 -- por el camino) y el oro por hora que deja: idea.seconds, idea.gph (cobre/h)
 function Earn.Timing(idea)
-  local secs = idea.craftSecs or Earn.CraftSeconds(idea.e.id)
-  idea.craftSecs = secs
-  local crafts = idea.crafts or 0
-  for _, a in ipairs(idea.actions or {}) do
-    if a.kind == "craft" and a.item ~= idea.itemID then crafts = crafts + (a.qty or 0) end
-  end
-  idea.seconds = crafts * secs
+  idea.craftSecs = idea.craftSecs or Earn.CraftSeconds(idea.e.id)
+  idea.seconds = IdeaSeconds(idea, idea.crafts or 0, idea.actions)
   idea.gph = idea.seconds > 0 and (idea.profit or 0) * 3600 / idea.seconds or nil
 end
 
@@ -236,8 +252,17 @@ local function VendorCrafts(idea)
   end
   local ok, why = Fits(1)
   if not ok then return 0, why, { cost = 0 } end
-  -- Tope: lo que cabe en VENDOR_TIME_BUDGET de fabricar (577 Linen Bag eran ~40 min)
-  local max = math.min(VENDOR_MAX, math.max(1, math.floor(Earn.VENDOR_TIME_BUDGET / (idea.craftSecs or DEFAULT_CAST))))
+  -- Tope: lo que cabe en VENDOR_TIME_BUDGET de fabricar (577 Linen Bag eran ~40 min),
+  -- con lo intermedio: los segundos por fabricación de la idea entera (lo mismo que
+  -- mide Earn.Timing), medidos en el tope que saldría sin lo intermedio (en 1, el
+  -- redondeo de un intermedio que da 2 contaría una fabricación entera)
+  local own = idea.craftSecs or DEFAULT_CAST
+  local max = math.min(VENDOR_MAX, math.max(1, math.floor(Earn.VENDOR_TIME_BUDGET / own)))
+  local ref = At(max).cost and max or 1
+  local perCraft = IdeaSeconds(idea, ref, At(ref).actions) / ref
+  if perCraft > own then
+    max = math.min(max, math.max(1, math.floor(Earn.VENDOR_TIME_BUDGET / perCraft)))
+  end
   if Fits(max) then return max, max < VENDOR_MAX and "time" or "max", At(max) end
   local lo, hi = 1, max
   while hi - lo > 1 do

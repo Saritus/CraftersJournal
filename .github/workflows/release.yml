@@ -26,6 +26,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # La versión del .toc es la de la etiqueta sin la v (v0.64.0 -> 0.64.0). El
+      # empaquetador pondría la etiqueta tal cual en @project-version@; así el .toc ya
+      # llega sustituido. Si no queda una versión de números, no se publica
+      - name: Versión de la etiqueta en el .toc
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "$version" | grep -Eq '^[0-9]+(\.[0-9]+)+$' || { echo "Etiqueta sin versión válida: $GITHUB_REF_NAME"; exit 1; }
+          sed -i "s/^## Version: @project-version@/## Version: $version/" CraftersJournal.toc
+          grep -q "^## Version: $version\s*$" CraftersJournal.toc || { echo "No se pudo poner la versión en el .toc"; exit 1; }
+
       - uses: BigWigsMods/packager@v2
         with:
           args: -g 1.60.1

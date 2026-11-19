@@ -1187,9 +1187,16 @@ end
 
 -- Fila que usa un objeto de tus bolsas al pulsarla (aprender una receta que llevas):
 -- usar objetos es protegido, así que va un botón seguro encima de la fila (sin
--- tapar la ✕). En combate no se pueden tocar: se deja como está hasta salir
+-- tapar la ✕). En combate no se pueden tocar: se apunta lo que pide la fila ahora y
+-- se aplica al salir (si no, una fila reutilizada al repintar en combate se quedaba
+-- con el botón del pergamino de la línea de antes, y su clic usaba ese pergamino)
+local pendingUse = {} -- [row] = itemID o false (esconder el botón)
 local function SetUseItem(row, itemID)
-  if InCombatLockdown and InCombatLockdown() then return end
+  if InCombatLockdown and InCombatLockdown() then
+    pendingUse[row] = itemID or false
+    return
+  end
+  pendingUse[row] = nil
   if not itemID then
     if row.useButton then row.useButton:Hide() end
     return
@@ -1212,6 +1219,16 @@ local function SetUseItem(row, itemID)
   b.itemID = itemID -- (para pruebas)
   b:Show()
 end
+do
+  local f = CreateFrame("Frame")
+  ES.SafeRegister(f, "PLAYER_REGEN_ENABLED")
+  f:SetScript("OnEvent", function()
+    local list = pendingUse
+    pendingUse = {}
+    for row, itemID in pairs(list) do SetUseItem(row, itemID or nil) end
+  end)
+end
+ES.UI.SetUseItem = SetUseItem -- para pruebas
 
 -- Botones − y + para cambiar una cantidad (line.onStep(delta); con Mayús, de 5 en 5),
 -- a la izquierda del valor. Solo se crean en las filas que los usan (lote de Ganar dinero)
@@ -2268,7 +2285,8 @@ local function SourcedLearnLine(r, st, profName, plan)
   local icon, sub, pick, label
   local useItem
   -- Comprada en la AH (Ledger.OnWay: detectada al comprar; el correo no se mira): el
-  -- paso queda hecho. Aprenderla, cuando te llegue, lo recuerda el paso de fabricar
+  -- paso queda hecho. Aprenderla, cuando te llegue, lo recuerda el paso de fabricar.
+  -- Sin `pick`: el clic no lleva a ninguna parte (y el tooltip no lo promete)
   local bought = best.kind ~= "owned" and r.scroll and ES.Ledger and ES.Ledger.OnWay and ES.Ledger.OnWay(r.scroll) > 0
   if bought then
     icon, title = RECIPE_ICON, L["Receta comprada: "] .. r.name
@@ -2363,7 +2381,10 @@ local function SourcedLearnLine(r, st, profName, plan)
       GameTooltip:AddLine(L["Sin Questie no se saben misiones ni vendedores: solo cuenta la AH."], 1, 0.6, 0.2, true)
     end
     GameTooltip:AddLine(" ")
-    if best.kind == "owned" then
+    if bought then
+      -- Comprada: su clic no lleva a ninguna parte (ni busca en la AH ni marca el camino
+      -- al subastador), así que el tooltip no lo promete
+    elseif best.kind == "owned" then
       GameTooltip:AddLine(L["Clic: usar el pergamino de tu bolsa y aprenderla."], 0.5, 0.8, 1, true)
     elseif best.kind == "ah" then
       if ES:IsAuctionHouseOpen() then
@@ -2384,6 +2405,7 @@ local function SourcedLearnLine(r, st, profName, plan)
     ahItem = not bought and best.kind == "ah" and r.scroll or nil, useItem = useItem, recipeName = r.name,
     bought = bought or nil }
 end
+ES.SourcedLearnLine = SourcedLearnLine -- para pruebas
 
 -- Cita "Con lo que llevas": por qué la ruta no usa una receta que podrías hacer
 -- con tus materiales, en una frase que se entienda de un vistazo (sin desglose: la

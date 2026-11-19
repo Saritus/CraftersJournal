@@ -770,14 +770,17 @@ end
 
 -- Una línea de chat: ¿dice que ganaste una subasta? (el mensaje del juego o el que
 -- escribe un addon de la AH en su lugar, como TSM: "You won an auction for [x]x50 for
--- 35s 00c"). La misma línea en varias ventanas de chat cuenta una vez
+-- 35s 00c"). La misma línea en varias ventanas de chat cuenta una vez: llega a cada
+-- ventana a la vez, en el mismo fotograma (GetTime() no cambia dentro de uno). Dos
+-- compras iguales seguidas son dos mensajes del servidor, en fotogramas distintos, y
+-- cuentan las dos (antes, con 2 s de margen, la segunda se perdía)
 local lastLine, lastLineAt
 function Ledger.OnChatLine(text, via)
   if not Ledger.Listening() or not Ledger.Readable(text) then return end
   local itemID, n = Ledger.ParseAuctionWon(text)
   if not itemID then return end
   local now = Now()
-  if text == lastLine and now - (lastLineAt or -99) < 2 then return end
+  if text == lastLine and now == lastLineAt then return end
   lastLine, lastLineAt = text, now
   if Ledger.AddOnWay(itemID, n, via) then Ledger.RefreshOnWay() end
 end

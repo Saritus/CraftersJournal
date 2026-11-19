@@ -611,10 +611,17 @@ ES.LoadCharacterData, ES.SaveCharacterData = LoadCharacterData, SaveCharacterDat
 ---------------------------------------------------------------------------
 local MAX_ERRORS = 50
 
+-- La versión instalada, del .toc. Lo publicado lleva la de la etiqueta (el empaquetador
+-- sustituye @project-version@; sin la v de "v0.64.0"). La copia de desarrollo, enlazada
+-- al repositorio, lleva el marcador sin sustituir: "dev". Sin metadatos, nil
 local function AddonVersion()
   local get = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
-  return get and get(ADDON_NAME, "Version") or "?"
+  local v = get and get(ADDON_NAME, "Version")
+  if type(v) ~= "string" or v == "" then return nil end
+  if v:find("@", 1, true) then return "dev" end
+  return (v:gsub("^[vV]", ""))
 end
+ES.AddonVersion = AddonVersion
 
 function ES:RecordError(kind, msg, stack)
   if not self.db then return end
@@ -628,7 +635,7 @@ function ES:RecordError(kind, msg, stack)
     end
   end
   log[#log + 1] = { kind = kind, msg = msg, stack = stack and tostring(stack):sub(1, 1500) or nil, count = 1,
-    first = now, last = now, version = AddonVersion() }
+    first = now, last = now, version = AddonVersion() or "?" }
   while #log > MAX_ERRORS do table.remove(log, 1) end
 end
 

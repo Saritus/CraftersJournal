@@ -1,5 +1,30 @@
 # Crafter's Journal
 
+## 0.63.0
+
+- **Your reagent bag counts.** What you carry in Forever's reagent bag now counts in the route, the Inventory and Make Money. "Collect your mail" didn't complete when what you collected (herbs, for example) went into that bag.
+- **Recipes with two tools.** Engineering helmets need both the Blacksmith Hammer and the Arclight Spanner, but only the first tool of each recipe was read, so the route never asked for the spanner (134 recipes).
+- **Use up what's left over.** When a step is done and you have materials left over, the route suggests crafting with them, but only when that earns more than selling them.
+- **Recipes for intermediates.** If an intermediate needs a recipe you don't know (Stonescale Oil), the route now has a row to learn it, and its price counts in the route total.
+- **Materials bought on the AH and from a vendor.** When part of a material is bought on the AH and the rest from a vendor, the route now lists it where most of it is bought (all the Crystal Vials were listed at the AH because 4 of them were cheaper there).
+- **Steps already started count from your level**, even while the recipe is still to be learned.
+- **Exact material amounts.** Each step's materials now match its crafts rounded up, instead of the fractional average (thanks to Saritus).
+- **More reliable posting confirmation.** Yes posts before closing the prompt, the prompt closes when you close the AH or the vendor, and it no longer says "Posted" when the AH doesn't answer.
+
+## 0.62.0
+
+This version also includes everything in 0.61.2, which wasn't published on its own.
+
+- **Tools on the shopping list.** The route only counted a tool (Arclight Spanner) at the level where you got it and then assumed you carried it: at 222 it asked you to craft Catseye Ultra Goggles without it. Every tool the steps need now goes on the shopping list when it isn't in your bags, and the step can't be crafted without it.
+
+## 0.61.2
+
+- **Routes no longer stuck at 99%.** If calculating a route fails, the page now says so instead of showing "Calculating the route… 99%" forever or restarting it in a loop. The progress bar is also better calibrated for new users.
+- **Engineering 1-300 is quick to calculate again.** Since 0.61.0 it took twice as long.
+- **No errors in dungeons.** AH purchases are read from chat only while the AH is open (and for 30 seconds after closing it), and the game's hidden texts in dungeons and combat are ignored.
+- **Transmutes in other languages.** With the game in Spanish, German or French, cooldown transmutes weren't recognized and the route asked for 186 "Transmute: Iron to Gold" in a row.
+- **Fewer back-and-forth trips.** A-B-A detours are removed even when that leg was already walked.
+
 ## 0.61.0
 
 - **New: route assistant (beta).** With a route started, a small banner tells you what's next: craft, buy on the AH or from a vendor, collect your mail or train. One click does it or takes you there. Open it with the button next to Leave route or with /cj mini. Above it, an arrow shows the yards and time to the trainer, vendor or mailbox, and the destination is marked on the map with Shortest Path, TomTom or the game's waypoint. Skip marks a step as done when you got it elsewhere (trade chat, guild, another character), and you can also skip learning the profession to go to the AH first. Its ? answers the most common questions. It's in beta: if you see something odd, open a post in the bugs channel on our Discord.

@@ -583,6 +583,34 @@ step("ganar dinero (sin correo)", function()
     assert(idea.seconds and idea.seconds > 0, "línea del vendedor sin tiempo: " .. idea.e.recipe.name)
     assert(idea.crafts * idea.craftSecs <= ES.Earn.VENDOR_TIME_BUDGET + idea.craftSecs,
       string.format("%s: %d fabricaciones pasan del tope de tiempo", idea.e.recipe.name, idea.crafts))
+    -- (con lo intermedio: el tope mide lo mismo que idea.seconds; margen de un minuto
+    -- por el redondeo de las fabricaciones de lo intermedio)
+    assert(idea.crafts <= 1 or idea.seconds <= ES.Earn.VENDOR_TIME_BUDGET + 60,
+      string.format("%s: %d s con lo intermedio pasan del tope de tiempo", idea.e.recipe.name, idea.seconds))
+  end
+  -- El tiempo cuenta fabricaciones, no unidades (spec make-money-timing): 10 de 3 s y 20
+  -- unidades de un intermedio que da 2 por fabricación y tarda 5 s = 10×3 + 10×5 = 80 s
+  do
+    local savedCS, savedV = ES.Earn.CraftSeconds, ES.Earn.VENDOR_MIN_GPH
+    local INT = 990001
+    ES.Earn.CraftSeconds = function(id) return id == INT and 5 or 3 end
+    local idea = { e = { id = 990000 }, itemID = 1, crafts = 10, profit = 10000, sellWhere = "vendor",
+      ctx = { data = { recipes = { [INT] = { out = { 2, 2 } } } } },
+      actions = { { kind = "craft", item = 2, qty = 20, recipe = INT }, { kind = "ah", item = 3, qty = 40 } } }
+    ES.Earn.Timing(idea)
+    assert(idea.seconds == 80, "tiempo con un intermedio que da 2: " .. tostring(idea.seconds))
+    -- El oro por hora usa ese tiempo: 1g en 80 s = 45g/h, por encima de un mínimo de 40g/h
+    assert(math.abs(idea.gph - 450000) < 1, "oro por hora: " .. tostring(idea.gph))
+    ES.Earn.VENDOR_MIN_GPH = 400000
+    assert(ES.Earn.FastEnough(idea), "45g/h no queda escondida por un mínimo de 40g/h")
+    -- Unidades que no llenan la última fabricación: 5 de un intermedio que da 2 = 3
+    assert(ES.Earn.IdeaSeconds(idea, 0, { { kind = "craft", item = 2, qty = 5, recipe = INT } }) == 15,
+      "5 unidades de un intermedio que da 2 son 3 fabricaciones")
+    -- Sin intermedios: 12 de 3 s = 36 s
+    idea.crafts, idea.actions = 12, {}
+    ES.Earn.Timing(idea)
+    assert(idea.seconds == 36, "sin intermedios: " .. tostring(idea.seconds))
+    ES.Earn.CraftSeconds, ES.Earn.VENDOR_MIN_GPH = savedCS, savedV
   end
   local savedGSI = GetSpellInfo
   GetSpellInfo = function(id) return "x", nil, 0, 5000 end -- lanzamiento de 5 s
@@ -649,7 +677,12 @@ step("ganar dinero (sin correo)", function()
   for _, idea in ipairs(res.batch) do
     for _, a in ipairs(idea.actions or {}) do
       if a.kind == "ah" or a.kind == "vendor" then assert(inShop[a.item], "falta en la lista de compra: " .. a.item) end
-      if a.kind == "craft" and a.item ~= idea.itemID then crafted = crafted + 1 end
+      if a.kind == "craft" and a.item ~= idea.itemID then
+        crafted = crafted + 1
+        -- (cada intermedio lleva el id de su receta: Earn.Timing mide su tiempo con ella)
+        local r = type(a.recipe) == "number" and idea.ctx.data.recipes[a.recipe]
+        assert(r and r.out and r.out[1] == a.item, "intermedio sin el id de su receta: " .. a.item)
+      end
     end
   end
   log[#log+1] = string.format("     lista del lote: %d materiales (%d intermedios fabricados por el camino)", #res.shopping, crafted)
@@ -2755,6 +2788,36 @@ step("ruta: receta en la bolsa, clic para aprenderla (botón seguro)", function(
   assert(b:GetAttribute("type") == "item" and b:GetAttribute("item") == "item:12345", "el botón no usa el objeto")
   ES.UI.StyleRow(row, { title = "Otra fila", icon = 134400 })
   assert(b._shown == false, "la fila reutilizada sigue usando el pergamino")
+  -- En combate no se puede tocar: se apunta y se aplica al salir (si no, la fila
+  -- reutilizada se quedaba con el botón del pergamino de antes)
+  local savedLock = InCombatLockdown
+  local ok, err = pcall(function()
+    InCombatLockdown = function() return false end
+    ES.UI.StyleRow(row, { title = "Aprender receta: X", icon = 134400, useItem = 12345 })
+    assert(b._shown ~= false and b.itemID == 12345, "fuera de combate, el botón se aplica al momento")
+    InCombatLockdown = function() return true end
+    ES.UI.StyleRow(row, { title = "Otra fila", icon = 134400 })
+    assert(b._shown ~= false and b.itemID == 12345, "en combate el botón seguro no se toca")
+    InCombatLockdown = function() return false end
+    FireEvent("PLAYER_REGEN_ENABLED")
+    assert(b._shown == false, "al salir de combate, la fila sin objeto sigue con el botón del pergamino")
+    -- En combate pasa a otro pergamino: al salir, el suyo
+    InCombatLockdown = function() return true end
+    ES.UI.StyleRow(row, { title = "Aprender receta: Y", icon = 134400, useItem = 67890 })
+    InCombatLockdown = function() return false end
+    FireEvent("PLAYER_REGEN_ENABLED")
+    assert(b._shown ~= false and b.itemID == 67890 and b:GetAttribute("item") == "item:67890",
+      "al salir de combate, el botón usa el pergamino de la fila que se ve")
+    -- Repintada en combate y otra vez fuera antes de salir: manda lo último
+    InCombatLockdown = function() return true end
+    ES.UI.StyleRow(row, { title = "Otra fila", icon = 134400 })
+    InCombatLockdown = function() return false end
+    ES.UI.StyleRow(row, { title = "Aprender receta: X", icon = 134400, useItem = 12345 })
+    FireEvent("PLAYER_REGEN_ENABLED")
+    assert(b._shown ~= false and b.itemID == 12345, "lo apuntado en combate pisa lo aplicado después")
+  end)
+  InCombatLockdown = savedLock
+  if not ok then error(err, 0) end
 end)
 step("vender parte de una pila: se parte y se vende lo justo", function()
   -- 17 Elixir of Ogre Strength en una pila, hay que vender 12: antes no vendía ninguno
@@ -4510,6 +4573,103 @@ step("novedades: una vez por versión, y en vista de desarrollo cuando quieras",
   GetAddOnMetadata = savedGet
   ES.db.whatsNewSeen, ES.db.scans, ES.db.lastPage, ES.db.devTools = savedSeen, savedScans, savedPage, savedDev
   log[#log+1] = "     novedades: una vez por versión, nada en instalaciones nuevas, /cj whatsnew solo en la copia de desarrollo"
+end)
+-- Receta de la AH ya comprada (Ledger.OnWay): la fila no lleva a ninguna parte, y su
+-- tooltip ni da error (WP.AddToTooltip con pick nil) ni promete "buscarla en la AH"
+step("receta comprada en la AH: el tooltip sin error y sin prometer el clic", function()
+  local WP = ES.Waypoints
+  local saved = { WP.RecipeSource, ES.Ledger.OnWay, ES.IsAuctionHouseOpen, WP.Available,
+    GameTooltip.AddLine, GameTooltip.AddDoubleLine }
+  local ok, err = pcall(function()
+    local SCROLL = 99901
+    WP.RecipeSource = function()
+      return { best = { kind = "ah" }, ah = { price = 5000, listings = 3 }, quests = {}, vendors = {}, options = {} }
+    end
+    local bought = 1
+    ES.Ledger.OnWay = function(id) return id == SCROLL and bought or 0 end
+    WP.Available = function() return true end
+    local tip = {}
+    GameTooltip.AddLine = function(_, t) tip[#tip + 1] = tostring(t) end
+    GameTooltip.AddDoubleLine = function(_, a, b) tip[#tip + 1] = tostring(a) .. " | " .. tostring(b) end
+    local r = { name = "Pattern: Prueba", scroll = SCROLL, train = 100 }
+    local st = { from = 100, fee = 5000 }
+    local plan = { ctx = { prices = {}, opts = {} } }
+    local line = ES.SourcedLearnLine(r, st, "Sastrería", plan)
+    assert(line and line.bought and line.go == nil and line.ahItem == nil,
+      "la fila comprada no busca en la AH ni marca el camino")
+    for _, open in ipairs({ false, true }) do
+      ES.IsAuctionHouseOpen = function() return open end
+      tip = {}
+      local okTip, errTip = pcall(line.tooltip, CreateFrame("Button"))
+      assert(okTip, "con la AH " .. (open and "abierta" or "cerrada") .. ", el tooltip da error: " .. tostring(errTip))
+      local text = table.concat(tip, "\n")
+      assert(not text:find("Clic: buscarla en la Casa de Subastas", 1, true), "promete buscarla en la AH:\n" .. text)
+      assert(not text:find("Clic: marcar el camino", 1, true), "promete marcar el camino:\n" .. text)
+    end
+    -- Sin comprar, la misma receta sí: con la AH abierta, buscarla
+    bought = 0
+    line = ES.SourcedLearnLine(r, st, "Sastrería", plan)
+    ES.IsAuctionHouseOpen = function() return true end
+    tip = {}
+    line.tooltip(CreateFrame("Button"))
+    assert(line.ahItem == SCROLL and table.concat(tip, "\n"):find("Clic: buscarla en la Casa de Subastas", 1, true),
+      "sin comprar, la fila de la AH busca la receta")
+    -- WP.AddToTooltip sin función: nada, sin error
+    tip = {}
+    WP.AddToTooltip("Subastador más cercano", nil)
+    assert(#tip == 0, "WP.AddToTooltip sin pick no añade nada")
+  end)
+  WP.RecipeSource, ES.Ledger.OnWay, ES.IsAuctionHouseOpen, WP.Available, GameTooltip.AddLine, GameTooltip.AddDoubleLine =
+    saved[1], saved[2], saved[3], saved[4], saved[5], saved[6]
+  if not ok then error(err, 0) end
+end)
+-- La versión del .toc la pone el empaquetador (@project-version@ -> la etiqueta): en la
+-- copia de desarrollo se queda el marcador
+step("versión del addon: la de la etiqueta, o dev en la copia de desarrollo", function()
+  local savedGet, savedSeen, savedLog = GetAddOnMetadata, ES.db.whatsNewSeen, ES.db.errorLog
+  local ok, err = pcall(function()
+    assert(TOC_TEXT:find("\n## Version: @project%-version@"), "el .toc del repositorio lleva @project-version@")
+    local version
+    GetAddOnMetadata = function(_, field) if field == "Version" then return version end end
+    local function Shown() local f = ES.WhatsNewFrame() return f and f._shown end
+    if ES.WhatsNewFrame() then ES.WhatsNewFrame():Hide() end
+    -- Copia de desarrollo: "dev", Novedades no sale sola ni apunta nada
+    version = "@project-version@"
+    assert(ES.AddonVersion() == "dev", "el marcador es la versión de desarrollo: " .. tostring(ES.AddonVersion()))
+    ES.db.whatsNewSeen = "0.1.0"
+    ES:CheckWhatsNew()
+    assert(not Shown() and ES.db.whatsNewSeen == "0.1.0", "en la copia de desarrollo Novedades no sale sola")
+    ES.db.errorLog = {}
+    ES:RecordError("test", "error de prueba (dev)")
+    assert(ES.db.errorLog[1].version == "dev", "el error apunta dev: " .. tostring(ES.db.errorLog[1].version))
+    -- Lo publicado: la de la etiqueta, con o sin la v
+    for _, meta in ipairs({ "0.64.0", "v0.64.0" }) do
+      version = meta
+      assert(ES.AddonVersion() == "0.64.0", meta .. " -> " .. tostring(ES.AddonVersion()))
+      ES.db.errorLog = {}
+      ES:RecordError("test", "error de prueba")
+      assert(ES.db.errorLog[1].version == "0.64.0", "el error apunta 0.64.0: " .. tostring(ES.db.errorLog[1].version))
+    end
+    ES:CheckWhatsNew()
+    assert(ES.db.whatsNewSeen == "0.64.0", "con la versión publicada, Novedades la apunta")
+    if ES.WhatsNewFrame() then ES.WhatsNewFrame():Hide() end
+    -- Quien vio la 0.61.0 y entra con la 0.64.0: la 0.64.0, la 0.63.0 y la 0.62.0
+    -- (la 0.61.2 no se publicó: sus notas van con la 0.62.0)
+    local has = {}
+    for _, v in ipairs(ES.WHATS_NEW) do has[v.version] = true end
+    assert(has["0.62.0"] and has["0.63.0"], "faltan las notas de la 0.62.0 o la 0.63.0")
+    local fake = not has["0.64.0"] and { version = "0.64.0", items = { { title = "x", text = "y" } } }
+    if fake then table.insert(ES.WHATS_NEW, 1, fake) end
+    local since = ES:WhatsNewSince("0.61.0", "0.64.0")
+    if fake then table.remove(ES.WHATS_NEW, 1) end
+    local got = {}
+    for _, v in ipairs(since) do got[#got + 1] = v.version end
+    assert(table.concat(got, " ") == "0.64.0 0.63.0 0.62.0", "novedades de 0.61.0 a 0.64.0: " .. table.concat(got, " "))
+    version = nil
+    assert(ES.AddonVersion() == nil, "sin metadatos, nil")
+  end)
+  GetAddOnMetadata, ES.db.whatsNewSeen, ES.db.errorLog = savedGet, savedSeen, savedLog
+  if not ok then error(err, 0) end
 end)
 step("sin modo desarrollo: ni Subastas, ni Flipping, ni Pesca, ni buscador", function()
   assert(ES.DEV == nil and ES.DEV_BUILD == nil, "queda el modo desarrollo")
@@ -6689,6 +6849,18 @@ step("compras de la AH de camino al buzón", function()
     -- ...y el mensaje del juego de la misma compra (sin cantidad) tampoco
     FireEvent("CHAT_MSG_SYSTEM", "You won an auction for Silverleaf")
     assert(ES:HaveForShopping(765) == 50, "el mensaje del juego de la misma compra no suma: " .. ES:HaveForShopping(765))
+    -- ...pero dos compras iguales seguidas (dos mensajes, en fotogramas distintos y a
+    -- menos de 2 s) cuentan las dos; y cada una, en dos ventanas, una vez
+    local WIZARD_OIL = 20750
+    local oil = "You won an auction for [Wizard Oil] for 1s 00c"
+    assert(LG.ParseAuctionWon(oil) == WIZARD_OIL, "Wizard Oil por el nombre de los datos")
+    clock = 150
+    LG.OnChatLine(oil, "chat")
+    LG.OnChatLine(oil, "chat") -- (otra ventana, el mismo fotograma)
+    clock = 150.8
+    LG.OnChatLine(oil, "chat")
+    LG.OnChatLine(oil, "chat")
+    assert(ES:HaveForShopping(WIZARD_OIL) == 2, "dos compras iguales seguidas: " .. ES:HaveForShopping(WIZARD_OIL))
     -- 2. AH clásica: compra inmediata (PlaceAuctionBid) y te cobran
     clock = 200
     local money, savedGM, savedGAI = 100000, GetMoney, GetAuctionItemInfo

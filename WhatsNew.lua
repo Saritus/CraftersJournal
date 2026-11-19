@@ -11,8 +11,8 @@ local L = ES.L
 -- Para escribir las notas: /cj whatsnew [versión] la abre cuando quieras, sin tocar lo
 -- visto. Solo en tu copia: el comando está en DevTools.lua, que no se publica.
 --
--- Cómo añadir una versión: una entrada nueva ARRIBA en ES.WHATS_NEW, con la misma
--- versión que ## Version del .toc. Los textos van en español y su traducción en
+-- Cómo añadir una versión: una entrada nueva ARRIBA en ES.WHATS_NEW, con la versión
+-- de la etiqueta que la publicará (sin la v; el .toc la recibe al empaquetar). Los textos van en español y su traducción en
 -- Locales/enUS.lua (como el resto del addon).
 ---------------------------------------------------------------------------
 
@@ -20,6 +20,34 @@ local L = ES.L
 -- text, top }. `top = true`: destacada, la primera de la lista aunque sea de una
 -- versión anterior (si te saltaste versiones, todo sale junto: ver ShowWhatsNew)
 ES.WHATS_NEW = {
+  {
+    version = "0.63.0",
+    items = {
+      { icon = "Interface\\Icons\\INV_Misc_Bag_10", title = "La bolsa de componentes cuenta",
+        text = "Lo que llevas en la bolsa de componentes cuenta en la ruta, el Inventario y Ganar dinero, y \"Recoge el correo\" se completa aunque lo recogido vaya a esa bolsa." },
+      { icon = "Interface\\Icons\\Trade_Engineering", title = "Recetas con dos herramientas",
+        text = "Los cascos de ingeniería piden el Blacksmith Hammer y la Arclight Spanner, y la ruta ya pide las dos." },
+      { icon = "Interface\\Icons\\INV_Misc_Coin_02", title = "Gasta lo que sobra",
+        text = "Al acabar un paso, si te sobran materiales y fabricar con ellos deja más que venderlos, la ruta te lo propone." },
+      { icon = "Interface\\Icons\\INV_Scroll_03", title = "Recetas de lo intermedio",
+        text = "Si algo intermedio pide una receta que no sabes (Stonescale Oil), la ruta tiene una fila para aprenderla y cuenta su precio." },
+      { icon = "Interface\\Icons\\INV_Misc_Coin_01", title = "Confirmar al anunciar, más fiable",
+        text = "El Sí anuncia antes de cerrar el aviso, el aviso se cierra al cerrar la AH o el vendedor, y ya no dice \"Anunciados\" si la AH no responde." },
+    },
+  },
+  {
+    version = "0.62.0",
+    items = {
+      { icon = "Interface\\Icons\\INV_Misc_PocketWatch_01", title = "Rutas que no se quedan en el 99%",
+        text = "Si el cálculo de una ruta falla, la página lo dice en vez de quedarse en \"Calculando la ruta… 99%\". E Ingeniería 1-300 vuelve a calcularse rápido." },
+      { icon = "Interface\\Icons\\Trade_Engineering", title = "Herramientas en la lista de la compra",
+        text = "Si un paso pide una herramienta que no llevas (Arclight Spanner), va a la lista de la compra en vez de darla por hecha." },
+      { icon = "Interface\\Icons\\Trade_Alchemy", title = "Transmutaciones en otros idiomas",
+        text = "Con el juego en español, alemán o francés, la ruta ya no pide 186 transmutaciones seguidas: reconoce su enfriamiento." },
+      { icon = "Interface\\Icons\\Spell_Holy_BorrowedTime", title = "Sin errores en mazmorras",
+        text = "Las compras de la AH se leen del chat solo con la AH abierta: en mazmorras y en combate ya no salen errores." },
+    },
+  },
   {
     version = "0.61.0",
     items = {
@@ -110,11 +138,8 @@ ES.WHATS_NEW = {
   },
 }
 
-local function AddonVersion()
-  local get = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
-  return get and get(ADDON_NAME, "Version") or nil
-end
-ES.AddonVersion = AddonVersion
+-- (Core.lua: "0.64.0", "dev" en la copia de desarrollo o nil)
+local function AddonVersion() return ES.AddonVersion() end
 
 -- Compara "0.47.0" con "0.48.0" número a número: -1, 0 o 1 (lo que no es número, 0)
 local function CompareVersions(a, b)
@@ -329,7 +354,8 @@ end
 -- Al entrar: si hay versión nueva con notas, la ventana (una vez por versión)
 function ES:CheckWhatsNew()
   local db, current = self.db, AddonVersion()
-  if not db or not current then return end
+  -- (en la copia de desarrollo no salen solas ni se apunta nada: /cj whatsnew)
+  if not db or not current or current == "dev" then return end
   local seen = db.whatsNewSeen
   if seen and CompareVersions(current, seen) <= 0 then return end
   -- Instalación nueva (ni un escaneo ni la ventana abierta nunca): no hay "novedades"
