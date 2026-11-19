@@ -2440,8 +2440,9 @@ local function RouteBuy(plan, profKey, level, opts)
   local function Bags(itemID) return ES.HaveForShopping and ES:HaveForShopping(itemID) or ES:ItemCount(itemID) end
   -- (lo ya convertido cuenta como su material: ConvertedHave)
   local Have = ConvertedHave(plan, Bags, math.max(plan.from or level or 1, level or plan.from or 1))
+  -- (en los dos sitios, donde va la mayor parte: Planner.ShoppingSource)
   local shopping = {}
-  for _, it in ipairs(plan.shopping or {}) do shopping[it.itemID] = it end
+  for _, it in ipairs(plan.shopping or {}) do shopping[it.itemID] = ES.Planner.ShoppingSource(plan, it.itemID) end
   local res = { ah = {}, vendor = {}, have = {}, left = 0, need = {}, phase = phase, Have = Have, plan = plan }
   local ids = {}
   for itemID, n in pairs(routeNeed) do
@@ -3353,6 +3354,36 @@ local function RouteLines(plan, page, opts)
           end
         end,
       }
+      -- Su receta aún no la sabes (Stonescale Oil, del instructor): antes, aprenderla. Es
+      -- el paso actual mientras no la sepas (Discord: "me dice que fabrique 14 y no la
+      -- tengo aprendida"). Su precio ya va en la ruta (plan.prepLearn)
+      local prep = recipeID and plan.prepLearn and plan.prepLearn[recipeID]
+      if prep and missing > 0 and not ES:IsRecipeKnown(recipeID) then
+        local pr = c.recipe
+        local trainer = prep.source == "trainer"
+        local learnAt = pr.train or (pr.t and pr.t[1]) or st.from
+        local pick, plabel
+        if trainer and pr.tr then
+          local who = pr.rankTr or pr.tr
+          pick, plabel = function() return WP.Nearest(who) end, L["Instructor más cercano"]
+        elseif trainer then
+          pick, plabel = WP.Target("trainer", page.profKey, learnAt + 1), L["Instructor más cercano"]
+        elseif pr.scroll then
+          pick, plabel = WP.Target("vendor", pr.scroll), L["Vendedor más cercano"]
+        end
+        local ltitle = string.format("%s %s", trainer and L["Entrenar"] or L["Comprar receta:"], pr.name)
+        local lsub = (LEARN_WHERE[prep.source] or "?") .. " · " .. string.format(L["para fabricar %s"], name)
+        local learnLine = {
+          level = line.level, icon = trainer and TRAIN_ICON or RECIPE_ICON, title = ltitle, sub = lsub,
+          value = prep.cost > 0 and Signed(prep.cost) or (GREY .. "?|r"), go = pick,
+          current = line.current, prepLearn = recipeID, -- (para pruebas)
+          trainerLearn = trainer or nil, learnName = pr.name, learnAt = learnAt, learnID = recipeID,
+          tooltip = pick and TravelTooltip(ltitle, string.format(L["%s · requiere %s (%d) · cuesta %s"], LEARN_WHERE[prep.source] or "?",
+            profName, learnAt, prep.cost > 0 and ES.Money(prep.cost) or L["precio desconocido"]), plabel, pick) or nil,
+        }
+        line.current = nil
+        if later then afterStep[#afterStep + 1] = learnLine else lines[#lines + 1] = learnLine end
+      end
       if later then afterStep[#afterStep + 1] = line else lines[#lines + 1] = line end
       end -- (c.quantity > 0)
     end
@@ -3475,7 +3506,11 @@ local function RouteLines(plan, page, opts)
     local current = inStep and not learnPending and not prepPending and not rankPending
     -- Lo que se tarda en fabricar este paso (lo que falta, si vas por él)
     local craftSecs = ES.Planner.CraftSeconds(st.id)
-    local stepCrafts = current and left or (st.crafts + (st.aheadCrafts or 0))
+    -- Ya por encima del principio del paso (subiste con otra receta, o falta aprender
+    -- esta): lo que queda desde tu nivel, no las del plan. Si no, a 240 seguía "33
+    -- fabricaciones" del paso 236-265 sin la receta aprendida (Discord)
+    local started = level > st.from and not done
+    local stepCrafts = (current or started) and left or (st.crafts + (st.aheadCrafts or 0))
     local stepSecs = done and 0 or craftSecs * stepCrafts
     routeSecs = routeSecs + stepSecs
     local timeText = ""
@@ -3543,7 +3578,7 @@ local function RouteLines(plan, page, opts)
         or current and (string.format(L["%d/%d puntos · ~%s%d|r fabricaciones más · %s/u"], level - st.from, st.to - st.from,
           GOLD, left, ES.Money(st.unitCost)) .. (batchText and (" · " .. batchText) or "") .. timeText .. aheadText)
         or (string.format(L["%s%d fabricaciones|r · %s/u"], perPoint > LOW_CHANCE_CRAFTS and ORANGE or "",
-        st.crafts + (st.aheadCrafts or 0), ES.Money(st.unitCost)) .. (batchText and (" · " .. batchText) or "") .. timeText .. aheadText),
+        stepCrafts, ES.Money(st.unitCost)) .. (batchText and (" · " .. batchText) or "") .. timeText .. aheadText),
       -- (la segunda mejor receta y por qué es peor va solo en el tooltip: AddAltTooltip)
       value = Signed(st.total - st.fee), item = r.out and r.out[1], -- lo de aprender va en su fila
       onSkip = not done and Skip(st.id) or nil,
@@ -3752,6 +3787,55 @@ local function RouteLines(plan, page, opts)
   if rankDue and not rankDue.promoted then
     rankDue.line.sub = (rankDue.line.sub or "") .. " · " .. ORANGE
       .. string.format(L["ya puedes · antes de %d"], rankDue.before) .. "|r"
+  end
+  -- Lo que sobra de un paso acabado, si fabricarlo deja más que venderlo (ver
+  -- Planner.Leftover: la misma cuenta que la ruta). Va justo antes del paso actual y es
+  -- el paso actual: cuanto antes, más probabilidad de punto. "Saltar" lo quita esta sesión
+  if locked and page.detected and (page.from or 0) < settings.lock.to then
+    ES.routeSkips[page.profKey] = ES.routeSkips[page.profKey] or {}
+    local skips = ES.routeSkips[page.profKey]
+    local _, cap = ES:GetProfessionSkill(page.data.skillLine)
+    local lo = ES.Planner.Leftover(plan, page.from or plan.from, cap)
+    if lo and skips.leftover ~= lo.id then
+      local r = lo.recipe
+      local name, texture = ItemLabel(r.out and r.out[1] or 0, r.name)
+      local p1 = math.floor(lo.points * 10 + 0.5) / 10
+      local pts = ES.Market.Dec and ES.Market.Dec(p1) or string.format("%.1f", p1)
+      local title = string.format(L["Gasta lo que sobra: %d× %s"], lo.crafts, name)
+      local line = {
+        level = tostring(page.from or plan.from), icon = texture or 134400, title = title,
+        bannerTitle = string.format("%s %d× %s", L["Fabrica"], lo.crafts, name),
+        sub = string.format(L["~%s puntos · deja %s más que vender los materiales"], pts, ES.Money(lo.gain)),
+        bannerSub = string.format(L["lo que sobra · ~%s puntos"], pts),
+        value = Signed(-lo.gain), leftover = lo, stepRecipe = lo.id, craftCount = lo.crafts,
+        onClick = function()
+          if ES:IsRecipeKnown(lo.id) then ES:CraftRecipe(lo.id, lo.crafts) else ES:OpenRecipe(lo.id) end
+        end,
+        markHave = function() skips.leftover = lo.id end,
+        tooltip = function(row)
+          GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+          GameTooltip:AddLine(title, 1, 0.82, 0)
+          GameTooltip:AddLine(L["Te han sobrado materiales de un paso ya hecho y esta receta aún da puntos. Gastarlos deja más que venderlos: los puntos que te da ya no los subes con la receta siguiente."], 1, 1, 1, true)
+          GameTooltip:AddLine(" ")
+          GameTooltip:AddDoubleLine(L["Puntos que te ahorras"], ES.Money(lo.saving), 1, 1, 1, 1, 1, 1)
+          GameTooltip:AddDoubleLine(L["Lo que vale lo fabricado"], ES.Money(lo.sale), 1, 1, 1, 1, 1, 1)
+          GameTooltip:AddDoubleLine(L["Materiales (venderlos o reponerlos)"], "-" .. ES.Money(lo.matValue), 1, 1, 1, 1, 1, 1)
+          GameTooltip:AddDoubleLine(L["Ganas"], ES.Money(lo.gain), 1, 0.82, 0, 0.4, 1, 0.4)
+          GameTooltip:AddLine(" ")
+          GameTooltip:AddLine(L["Solo cuenta lo que no pide el resto de la ruta. Si prefieres venderlo, Saltar lo quita."], 0.8, 0.8, 0.8, true)
+          GameTooltip:AddLine(string.format(L["Clic: abrir la receta y fabricar %d."], lo.crafts), 0.5, 0.8, 1, true)
+          GameTooltip:Show()
+        end,
+      }
+      local at
+      for i, l in ipairs(lines) do if l.current then at = i break end end
+      if not at then
+        for i, l in ipairs(lines) do if l.level and not l.done then at = i break end end
+      end
+      if at then lines[at].current = nil end
+      line.current = true
+      table.insert(lines, at or (#lines + 1), line)
+    end
   end
   -- Con la ruta empezada siempre hay un paso actual (al saltar una receta, su paso de
   -- fabricar no lo era porque faltaba aprenderla): el primero sin hacer
@@ -4025,7 +4109,10 @@ local function ShopLines(plan, page)
   -- usa de tus bolsas) frente a lo que llevas: cuántos tienes y cuántos faltan. Se
   -- actualiza al comprar, sacar del correo o fabricar (BAG_UPDATE_DELAYED, HomeUI.lua)
   for _, it in ipairs(plan.shopping) do
-    if it.source == "ah" then ah[#ah + 1] = it else vendor[#vendor + 1] = it end
+    -- (en los dos sitios, una sola fila: donde va la mayor parte, como las filas de compra)
+    if ES.Planner.ShoppingSource(plan, it.itemID) == it then
+      if it.source == "ah" then ah[#ah + 1] = it else vendor[#vendor + 1] = it end
+    end
     total = total + it.total
   end
   -- Cuánto hace falta: la misma regla que la Lista de compra y la ventana del

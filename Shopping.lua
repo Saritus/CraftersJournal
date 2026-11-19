@@ -93,12 +93,10 @@ function Shopping.ByPhase(profKey)
   return not (s and s.byPhase == false)
 end
 
--- Fuente y precio de un material según la ruta (AH antes que vendedor)
+-- Fuente y precio de un material según la ruta (en los dos sitios, donde va la mayor
+-- parte: Planner.ShoppingSource)
 local function SourceOf(plan, itemID)
-  local found
-  for _, e in ipairs(plan.shopping or {}) do
-    if e.itemID == itemID and (not found or e.source == "ah") then found = e end
-  end
+  local found = ES.Planner.ShoppingSource(plan, itemID)
   if found then return found.source, found.unit end
   return (ES.Data.VendorPrices and ES.Data.VendorPrices[itemID]) and "vendor" or "ah", 0
 end

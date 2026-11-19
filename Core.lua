@@ -226,6 +226,17 @@ function ES:ItemCount(itemID)
   return get and (get(itemID, false) or 0) or 0
 end
 
+-- Las bolsas que llevas encima: 0 a NUM_BAG_SLOTS y, en Forever, la de componentes
+-- (Enum.BagIndex.ReagentBag = 5). Sin ella, las hierbas que caían ahí no contaban: el
+-- paso "Recoge el correo" no se completaba al recogerlas
+function ES.CarriedBags()
+  local list = {}
+  for bag = 0, NUM_BAG_SLOTS or 4 do list[#list + 1] = bag end
+  local reagent = Enum and Enum.BagIndex and Enum.BagIndex.ReagentBag
+  if reagent and reagent > list[#list] then list[#list + 1] = reagent end
+  return list
+end
+
 -- ¿El personaje ya sabe esta receta? (las recetas son hechizos del libro de hechizos)
 function ES:IsRecipeKnown(spellID)
   if not spellID or spellID <= 0 then return false end

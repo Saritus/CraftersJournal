@@ -1646,7 +1646,9 @@ local bankOpen = false
 local BANK = BANK_CONTAINER or -1
 
 local function BankBags()
-  local first = (NUM_BAG_SLOTS or 4) + 1
+  -- (en Forever la 5 es la bolsa de componentes: las del banco empiezan en la 6)
+  local carried = ES.CarriedBags()
+  local first = (Enum and Enum.BagIndex and Enum.BagIndex.BankBag_1) or carried[#carried] + 1
   local list = { BANK }
   for bag = first, first + (NUM_BANKBAGSLOTS or 6) - 1 do list[#list + 1] = bag end
   return list

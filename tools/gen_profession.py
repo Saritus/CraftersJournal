@@ -276,11 +276,16 @@ def load_common():
         if best is None or (item in sold, item in item_skill, item) > (best in sold, best in item_skill, best):
             scrolls[spell] = item
 
-    tools, tool_masks = {}, {}
+    # Una receta puede pedir dos herramientas (los cascos de ingeniería: Blacksmith Hammer
+    # y Arclight Spanner). Antes solo se leía la primera y la ruta no pedía la llave
+    tools, tools2, tool_masks = {}, {}, {}
     for r in rows("SpellTotems_forever"):
         cat = int(r["RequiredTotemCategoryID_0"] or 0)
         if cat in TOOL_ITEMS:
             tools[int(r["SpellID"])] = cat
+        cat2 = int(r.get("RequiredTotemCategoryID_1") or 0)
+        if cat2 in TOOL_ITEMS:
+            tools2[int(r["SpellID"])] = cat2
     for r in rows("TotemCategory_forever"):
         if int(r["ID"]) in TOOL_ITEMS:
             tool_masks[int(r["ID"])] = int(r["TotemCategoryMask"])
@@ -333,7 +338,7 @@ def load_common():
     return dict(sla=sla, era=era, names=names, reagents=reagents, creates=creates, scrolls=scrolls,
                 item_info=item_info, item_rep=item_rep, item_skill=item_skill, item_class=item_class,
                 item_quality=item_quality, item_bop=item_bop,
-                tools=tools, tool_masks=tool_masks, fees=fees, ranks=ranks, trainers=trainers,
+                tools=tools, tools2=tools2, tool_masks=tool_masks, fees=fees, ranks=ranks, trainers=trainers,
                 teachers=teachers, untaught=untaught)
 
 
@@ -531,8 +536,8 @@ def main():
     ranks += [r for r in EXTRA_RANKS.get(skill_line, []) if r[0] > max(x[0] for x in ranks)]
     trainers = sorted(quest_trainers()[prof].items())
 
-    tools = c["tools"]
-    used_tools = {TOOL_ITEMS[t] for s, t in tools.items() if s in recipes}
+    tools, tools2 = c["tools"], c["tools2"]
+    used_tools = {TOOL_ITEMS[t] for d in (tools, tools2) for s, t in d.items() if s in recipes}
 
     # Recetas que no dan puntos (amarilla == gris) pero fabrican un material que
     # otra receta necesita, p. ej. Cured Thick Hide (Thick Hide + Deeprock Salt)
@@ -692,6 +697,8 @@ def main():
         parts.append("r = { " + ", ".join("{ %d, %d }" % rq for rq in reagents) + " }")
         if sid in tools:
             parts.append(f"tool = {tools[sid]}")
+        if sid in tools2 and tools2[sid] != tools.get(sid):
+            parts.append(f"tool2 = {tools2[sid]}")
         if output:
             parts.append(f"out = {{ {output[0]}, {num(output[1])} }}")
             parts.append(f"oq = {c['item_quality'].get(output[0], 1)}")
@@ -720,7 +727,7 @@ def main():
     out.append("-- Herramientas: [categoría] = { objeto, máscara } (un bastón superior cubre a los inferiores)")
     out.append("ES.Data.Tools = ES.Data.Tools or {}")
     tool_masks = c["tool_masks"]
-    for cat in sorted(cc for cc in tool_masks if TOOL_ITEMS[cc] in used_tools or any(t == cc for t in tools.values())):
+    for cat in sorted(cc for cc in tool_masks if TOOL_ITEMS[cc] in used_tools or any(t == cc for d in (tools, tools2) for t in d.values())):
         out.append(f"ES.Data.Tools[{cat}] = {{ item = {TOOL_ITEMS[cat]}, mask = {tool_masks[cat]}, family = \"{TOOL_FAMILY[cat]}\" }}")
     out.append("")
     out.append("ES.Data.VendorPrices = ES.Data.VendorPrices or {}")

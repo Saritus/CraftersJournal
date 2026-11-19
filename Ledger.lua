@@ -53,10 +53,10 @@ local function SlotCount(bag, slot)
   return count or 0
 end
 
--- Casillas de las bolsas (no el banco) con este objeto: { {bag, slot, count} }
+-- Casillas de las bolsas (no el banco; sí la de componentes) con este objeto: { {bag, slot, count} }
 local function Slots(itemID)
   local list = {}
-  for bag = 0, 4 do
+  for _, bag in ipairs(ES.CarriedBags()) do
     for slot = 1, NumSlots(bag) or 0 do
       if ContainerItemID(bag, slot) == itemID then
         list[#list + 1] = { bag = bag, slot = slot, count = SlotCount(bag, slot) }

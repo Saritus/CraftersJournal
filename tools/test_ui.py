@@ -3684,13 +3684,39 @@ step("herramienta que piden los pasos y no llevas: en la lista", function()
       "en el nivel donde la ruta la consigue ya va en pointNeed: no dos veces")
     bags[6219] = 1
     out = {}
-    assert(not P.AddMissingTools("Engineering", plan, 222, 245, out), "llevándola no se pide")
+    -- (las Catseye Ultra Goggles piden también el Gyromatic Micro-Adjustor: tool2)
+    -- (no lo vende nadie: se piden sus materiales para fabricarlo)
+    assert(P.AddMissingTools("Engineering", plan, 222, 245, out) and not out[6219],
+      "con la llave, falta el Micro-Adjustor")
+    bags[10498] = 1
+    out = {}
+    assert(not P.AddMissingTools("Engineering", plan, 222, 245, out), "llevándolas no se piden")
     -- Sin ella no se puede fabricar el paso (y no cuenta como "comprado, a fabricar")
     for _, rq in ipairs(E.recipes[12607].r) do bags[rq[1]] = rq[2] * 3 end
     assert(ES.CraftableFromBags(12607) == 3, "con la llave y materiales para 3: " .. tostring(ES.CraftableFromBags(12607)))
     bags[6219] = nil
     local n, short = ES.CraftableFromBags(12607)
     assert(n == 0 and short and short.itemID == 6219, "sin la llave no se puede fabricar: " .. tostring(n))
+    -- Dos herramientas (CurseForge, 0.62.0: Goblin Mining Helmet pide Blacksmith Hammer Y
+    -- Arclight Spanner; solo se leía la primera y nunca pedía la llave)
+    local helm = E.recipes[12717]
+    assert(helm.tool == 162 and helm.tool2 == 14, "el casco pide martillo y llave en los datos")
+    bags = { [5956] = 1 } -- (solo el martillo)
+    local miss = P.MissingTools(helm)
+    assert(#miss == 1 and miss[1].item == 6219, "con el martillo, falta la llave")
+    plan.steps[#plan.steps + 1] = { from = 230, to = 245, id = 12717, recipe = helm }
+    out = {}
+    assert(P.AddMissingTools("Engineering", plan, 230, 245, out) and out[6219] and not out[5956],
+      "la lista pide la llave (no el martillo, que llevas)")
+    bags = {}
+    out = {}
+    P.AddMissingTools("Engineering", plan, 230, 245, out)
+    assert(out[6219] and out[5956], "sin ninguna, pide las dos")
+    for _, rq in ipairs(helm.r) do bags[rq[1]] = rq[2] * 2 end
+    bags[5956] = 1
+    assert(ES.CraftableFromBags(12717) == 0, "sin la llave el casco no se fabrica")
+    bags[6219] = 1
+    assert(ES.CraftableFromBags(12717) == 2, "con las dos, sí")
   end)
   ES.ItemCount = savedCount
   if not ok then error(err, 0) end
@@ -6619,6 +6645,20 @@ step("compras de la AH de camino al buzón", function()
     assert(ES:HaveForShopping(765) == 21, "10 en las bolsas y 11 de camino: " .. ES:HaveForShopping(765))
     bags = 21
     assert(ES:HaveForShopping(765) == 21 and #ES.charData.ahOnWay == 0, "todo recogido: fuera de lo de camino")
+    -- Recogido a la bolsa de componentes de Forever (Enum.BagIndex.ReagentBag = 5): también
+    -- llega (captura del 2026-11-19: "Recoge el correo" seguía tras recoger las hierbas)
+    local savedCC, savedEnum = C_Container, Enum
+    Enum = setmetatable({ BagIndex = { ReagentBag = 5 } }, { __index = savedEnum })
+    local reagent = 0
+    C_Container = { GetContainerNumSlots = function(b) return (b == 0 or b == 5) and 1 or 0 end,
+      GetContainerItemID = function(b) if b == 5 and reagent > 0 then return 765 end end,
+      GetContainerItemInfo = function(b) return { stackCount = b == 5 and reagent or 0 } end }
+    bags = 0
+    LG.AddOnWay(765, 12, "sistema")
+    assert(LG.OnWayItems()[765] == 12, "comprado: 12 de camino")
+    reagent, bags = 12, 12 -- (GetItemCount cuenta todas las bolsas)
+    assert(LG.OnWayItems()[765] == nil and #ES.charData.ahOnWay == 0, "recogido a la bolsa de componentes: ya no está de camino")
+    C_Container, Enum, bags = savedCC, savedEnum, 21
     -- El correo no se mira (daba problemas): abrir el buzón no cambia nada
     bags = 0
     LG.AddOnWay(765, 5, "sistema")
@@ -6743,6 +6783,66 @@ step("instructor abierto: aprender con un clic", function()
   GetNumTrainerServices, GetTrainerServiceInfo, GetTrainerServiceSkillLine, GetTrainerServiceItemLink = saved[1], saved[2], saved[3], saved[4]
   BuyTrainerService, C_Timer.After, LG.trainerOpen, ES.Print = saved[5], saved[6], saved[7], saved[8]
   if not ok then error(err, 0) end
+end)
+-- Un material que la ruta compra en los dos sitios (4 Crystal Vial en la AH, más baratos,
+-- y 40 al vendedor): se compra donde va la mayor parte. Antes ganaba la AH (Discord)
+step("ruta: material en la AH y en el vendedor, donde va la mayor parte", function()
+  local plan = { shopping = {
+    { itemID = 8925, quantity = 40, source = "vendor", unit = 500, total = 20000 },
+    { itemID = 8925, quantity = 4, source = "ah", unit = 449, total = 1796 },
+    { itemID = 3820, quantity = 12, source = "ah", unit = 213, total = 2556 },
+  } }
+  local e = ES.Planner.ShoppingSource(plan, 8925)
+  assert(e and e.source == "vendor" and e.quantity == 40, "Crystal Vial: al vendedor")
+  e = ES.Planner.ShoppingSource(plan, 3820)
+  assert(e and e.source == "ah", "lo que solo está en la AH, en la AH")
+  assert(ES.Planner.ShoppingSource(plan, 1) == nil, "lo que no compra la ruta: nada")
+end)
+-- Lo que sobra de un paso acabado (Planner.Leftover): fabricarlo solo si deja más que
+-- venderlo con la cuenta de la ruta (los puntos que ahorra a lo que los pagaba la ruta)
+step("ruta: gastar lo que sobra solo si compensa", function()
+  local PL = ES.Planner
+  local saved = { ES.ItemCount, ES.IsRecipeKnown, ES.HaveForShopping, ES.VendorSellPrice, ES.Market.FairPrice }
+  local bags = {}
+  ES.ItemCount = function(_, id) return bags[id] or 0 end
+  ES.HaveForShopping = function(_, id) return bags[id] or 0 end
+  ES.IsRecipeKnown = function() return true end
+  ES.VendorSellPrice = function() return 0 end
+  ES.Market.FairPrice = function() return nil end -- (sin AH: se vende al vendedor por 0)
+  local ok, err = pcall(function()
+    -- Paso 1 (100-105): receta A (1 hierba + 1 vial). Paso 2 (105-115): receta B (1 flor + 1 vial)
+    local A = { id = 901, name = "A", t = { 1, 100, 110, 120 }, r = { { 1, 1 }, { 3, 1 } }, out = { 11, 1 } }
+    local B = { id = 902, name = "B", t = { 1, 105, 115, 125 }, r = { { 2, 1 }, { 3, 1 } }, out = { 12, 1 } }
+    local plan = { from = 100, to = 115, reached = 115, choice = {}, pointNeed = {}, pointChance = {}, pointNet = {},
+      steps = { { id = 901, recipe = A, from = 100, to = 105 }, { id = 902, recipe = B, from = 105, to = 115 } },
+      ctx = { data = { recipes = { [901] = A, [902] = B } }, prices = { [3] = { minUnit = 10 } }, opts = {} } }
+    for s = 100, 114 do
+      local id = s < 105 and 901 or 902
+      plan.choice[s], plan.pointChance[s] = id, 1
+      plan.pointNeed[s] = { [s < 105 and 1 or 2] = 1, [3] = 1 }
+      plan.pointNet[s] = 500 -- (cada punto de B le cuesta a la ruta 5s)
+    end
+    -- A 105 te sobran 3 hierbas; los 10 viales los pide B: se reponen a 10c cada uno
+    bags = { [1] = 3, [3] = 10, [2] = 10 }
+    local lo = PL.Leftover(plan, 105, 300)
+    assert(lo and lo.id == 901 and lo.crafts == 3, "3 hierbas de sobra y B cuesta 5s el punto: fabricar 3 A: " .. tostring(lo and lo.crafts))
+    assert(math.abs(lo.matValue - 30) < 1e-6, "los viales que pide B, a lo que cuesta reponerlos: " .. tostring(lo.matValue))
+    -- Si la receta siguiente es barata (cada punto de B cuesta 5c), no compensa
+    for s = 105, 114 do plan.pointNet[s] = 5 end
+    assert(PL.Leftover(plan, 105, 300) == nil, "con B casi gratis, mejor no gastarlo")
+    -- Si B da dinero (punto negativo), tampoco: la ruta saldría más cara
+    for s = 105, 114 do plan.pointNet[s] = -200 end
+    assert(PL.Leftover(plan, 105, 300) == nil, "con B dando beneficio, no se proponen")
+    for s = 105, 114 do plan.pointNet[s] = 500 end
+    -- Sin nada que sobre de verdad (las hierbas las pide la ruta... aquí, nada en las bolsas): nada
+    bags = { [3] = 13, [2] = 10 }
+    assert(PL.Leftover(plan, 105, 300) == nil, "sin hierbas de sobra no hay nada que gastar")
+    -- Gris (A ya no da puntos a 120) o en tu tope: nada
+    bags = { [1] = 3, [3] = 13, [2] = 10 }
+    assert(PL.Leftover(plan, 105, 105) == nil, "en tu tope no suben puntos")
+  end)
+  ES.ItemCount, ES.IsRecipeKnown, ES.HaveForShopping, ES.VendorSellPrice, ES.Market.FairPrice = unpack(saved)
+  assert(ok, err)
 end)
 -- Vendedor e instructor en el mismo viaje (captura del 2026-11-17: mandaba a un
 -- vendedor junto a la AH habiendo uno al lado del instructor): el de al lado del

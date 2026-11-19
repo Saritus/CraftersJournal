@@ -231,12 +231,140 @@ local function Need(plan, from, to, z, green)
   return out
 end
 
+-- Dónde comprar un material de la ruta: la entrada de plan.shopping (o nil). Si la ruta
+-- lo compra en los dos sitios (las pocas subastas más baratas que el vendedor y el resto
+-- al vendedor), donde va la mayor parte. Antes ganaba la AH y las filas de compra
+-- mandaban a comprar allí los 44 Crystal Vial cuando solo 4 estaban más baratos (Discord)
+function Planner.ShoppingSource(plan, itemID)
+  local found
+  for _, e in ipairs(plan and plan.shopping or {}) do
+    if e.itemID == itemID and (not found or e.quantity > found.quantity) then found = e end
+  end
+  return found
+end
+
 -- Lo que pide la ruta desde tu nivel hasta el final: { [itemID] = unidades }, en
 -- fabricaciones enteras (ver Need)
 function Planner.NeedFrom(plan, level)
   local need = {}
   for itemID, n in pairs(Need(plan, level, plan.reached or plan.to or level, 0)) do need[itemID] = n.target end
   return need
+end
+
+---------------------------------------------------------------------------
+-- Lo que sobra de un paso acabado (el colchón de la compra por tramos, o la suerte):
+-- ¿fabricarlo o venderlo? Solo se propone fabricarlo si deja más que venderlo, con la
+-- misma cuenta que la ruta: cada punto que te da es un punto que ya no subes con la
+-- receta prevista (plan.pointNet: lo que cuesta de media), y lo fabricado se vende.
+-- Si la receta prevista deja más (o cuesta menos) que gastar lo que sobra, no sale:
+-- la ruta saldría más cara (Discord: sobraban materiales de pasos cortos en amarillo).
+-- Sobra lo que no pide el resto de la ruta. Si una fabricación gasta además algo que sí
+-- pide (el Leaded Vial de Nature Protection Potion, que también gasta Greater Mana
+-- Potion), eso cuenta a lo que costaría volver a comprarlo: hay que reponerlo
+---------------------------------------------------------------------------
+Planner.LEFTOVER_MIN_GAIN = 100 -- cobre: por debajo, no compensa ni decirlo
+
+-- Lo que te dan por una unidad: lo mejor de vendedor y AH (precio realista, menos
+-- comisión y depósito), con los precios de la ruta
+local function UnitSellValue(plan, itemID)
+  local ctx = plan.ctx
+  local vendor = ES:VendorSellPrice(itemID) or 0
+  local best = vendor
+  local ah = ctx and ctx.prices and ctx.prices[itemID]
+  local fair = ah and ES.Market:FairPrice(itemID, ah.minUnit)
+  if fair and fair.price then
+    local deposit, cut = Planner.AuctionCosts(vendor, ctx.opts or {})
+    best = math.max(best, fair.price * (1 - cut) - deposit)
+  end
+  return best
+end
+Planner.UnitSellValue = UnitSellValue
+
+-- Lo que cuesta volver a comprar una unidad (lo más barato de la AH y el vendedor, con
+-- los precios de la ruta), o nil si no se puede comprar
+local function UnitBuyCost(plan, itemID)
+  local ah = plan.ctx and plan.ctx.prices and plan.ctx.prices[itemID]
+  local cost = ah and ah.minUnit
+  local vendor = ES.Data.VendorPrices and ES.Data.VendorPrices[itemID]
+  if vendor and (not cost or vendor < cost) then cost = vendor end
+  return cost
+end
+
+-- Lo mejor que hacer con lo que sobra a tu nivel `level` (`cap`: el tope de tu rango):
+-- { recipe, id, crafts, points, gain, saving, sale, matValue } o nil. Una receta de un
+-- paso ya acabado que aún da puntos, tantas fabricaciones como dejen más que venderlo
+function Planner.Leftover(plan, level, cap)
+  if not (plan and plan.steps and plan.pointNet and level) then return nil end
+  local recipes = plan.ctx and plan.ctx.data and plan.ctx.data.recipes or {}
+  local stop = math.min(plan.reached or plan.to or level, cap or math.huge)
+  if level >= stop then return nil end
+  local current
+  for _, st in ipairs(plan.steps) do
+    if level >= st.from and level < st.to then current = st.id end
+  end
+  local need = Planner.NeedFrom(plan, level)
+  local best, seen = nil, {}
+  for _, st in ipairs(plan.steps) do
+    local r = recipes[st.id] or st.recipe
+    if st.to <= level and st.id ~= current and not seen[st.id] and r and r.r and r.t
+      and not Planner.Cooldown(r, st.id) and ES:IsRecipeKnown(st.id) then
+      seen[st.id] = true
+      -- De cada material: lo que llevas, lo que sobra (lo que no pide el resto de la
+      -- ruta), lo que te darían por él y lo que costaría reponerlo
+      local mats, crafts = {}, math.huge
+      for _, rq in ipairs(r.r) do
+        local bags = ES:ItemCount(rq[1]) or 0
+        local have = ES.HaveForShopping and ES:HaveForShopping(rq[1]) or bags
+        local m = { per = rq[2], bags = bags, sell = UnitSellValue(plan, rq[1]), buy = UnitBuyCost(plan, rq[1]),
+          surplus = math.max(0, math.min(bags, have - (need[rq[1]] or 0))) }
+        mats[#mats + 1] = m
+        crafts = math.min(crafts, math.floor(bags / rq[2]))
+        -- (algo tiene que sobrar de verdad: lo que no sobra de ninguno no es lo que sobra)
+        if m.surplus >= rq[2] then m.leftover = true end
+      end
+      -- Las que da lo que sobra: el material que sobra que antes se acaba
+      local cap = math.huge
+      for _, m in ipairs(mats) do
+        if m.leftover then cap = math.min(cap, math.floor(m.surplus / m.per)) end
+      end
+      crafts = cap < math.huge and math.min(crafts, cap) or 0
+      local outValue = r.out and r.out[2] * UnitSellValue(plan, r.out[1]) or 0
+      -- Una a una, mientras sume: cada fabricación da su probabilidad de punto (más baja
+      -- según subes) y ese punto se ahorra al precio que lo pagaba la ruta
+      local lvl, sum, saving, matValue = level, 0, 0, 0
+      local top = { gain = 0 }
+      for k = 1, crafts do
+        local s = math.floor(lvl + 1e-6) -- (EPS se declara más abajo)
+        if s >= stop then break end
+        local c = Planner.Chance(r.t, s)
+        if c <= 0 then break end
+        -- Lo que gasta esta: lo que sobra, a lo que te darían por ello; lo demás, a
+        -- lo que cuesta reponerlo (sin precio para reponerlo, no se gasta)
+        local cost, ok = 0, true
+        for _, m in ipairs(mats) do
+          local fromSurplus = math.max(0, math.min(m.per, m.surplus - (k - 1) * m.per))
+          local rest = m.per - fromSurplus
+          if rest > 0 and not m.buy then ok = false break end
+          cost = cost + fromSurplus * m.sell + rest * (m.buy or 0)
+        end
+        if not ok then break end
+        local save = c * (plan.pointNet[s] or 0)
+        saving = saving + save
+        matValue = matValue + cost
+        sum = sum + save + outValue - cost
+        lvl = lvl + c
+        if sum > top.gain then
+          top = { gain = sum, crafts = k, points = lvl - level, saving = saving,
+            sale = outValue * k, matValue = matValue }
+        end
+      end
+      if top.crafts and top.gain >= Planner.LEFTOVER_MIN_GAIN and (not best or top.gain > best.gain) then
+        top.recipe, top.id = r, st.id
+        best = top
+      end
+    end
+  end
+  return best
 end
 
 ---------------------------------------------------------------------------
@@ -382,17 +510,40 @@ end
 -- la compra no la pedía (CurseForge: "me mandó fabricar unas gafas que piden Arclight
 -- Spanner y no estaba en la lista")
 ---------------------------------------------------------------------------
--- La herramienta que pide `recipe` y no llevas en las bolsas (nil si no pide o la
--- llevas: vale cualquiera de su familia igual o mejor)
-function Planner.MissingTool(recipe)
-  local tools = ES.Data and ES.Data.Tools
-  local tool = recipe and recipe.tool and tools and tools[recipe.tool]
-  if not tool then return nil end
-  local fam = tool.family or "rod"
-  for _, t in pairs(tools) do
-    if (t.family or "rod") == fam and t.mask >= tool.mask and (ES:ItemCount(t.item) or 0) > 0 then return nil end
+-- Las herramientas que pide una receta: { ES.Data.Tools[...] }. Puede pedir dos (los
+-- cascos de ingeniería: Blacksmith Hammer y Arclight Spanner, recipe.tool y tool2);
+-- antes solo se miraba la primera y la ruta nunca pedía la llave (CurseForge, 0.62.0)
+function Planner.RecipeTools(recipe)
+  local tools, list = ES.Data and ES.Data.Tools, {}
+  if not (recipe and tools) then return list end
+  for _, cat in ipairs({ recipe.tool or false, recipe.tool2 or false }) do
+    if cat and tools[cat] then list[#list + 1] = tools[cat] end
   end
-  return tool
+  return list
+end
+
+-- ¿Llevas `tool` o una mejor de su familia?
+local function CarriesTool(tool)
+  local fam = tool.family or "rod"
+  for _, t in pairs(ES.Data.Tools) do
+    if (t.family or "rod") == fam and t.mask >= tool.mask and (ES:ItemCount(t.item) or 0) > 0 then return true end
+  end
+  return false
+end
+
+-- Las herramientas que pide `recipe` y no llevas en las bolsas: { tool } (vacía si no
+-- pide ninguna o las llevas: vale cualquiera de su familia igual o mejor)
+function Planner.MissingTools(recipe)
+  local list = {}
+  for _, tool in ipairs(Planner.RecipeTools(recipe)) do
+    if not CarriesTool(tool) then list[#list + 1] = tool end
+  end
+  return list
+end
+
+-- La primera que falta, o nil
+function Planner.MissingTool(recipe)
+  return Planner.MissingTools(recipe)[1]
 end
 
 -- La receta de `profKey` que fabrica `itemID` (para una herramienta sin vendedor)
@@ -415,10 +566,11 @@ function Planner.AddMissingTools(profKey, plan, from, to, out)
   local want = {} -- [familia] = herramienta (la mejor que piden)
   for _, st in ipairs(plan and plan.steps or {}) do
     if st.to > from and st.from < to then
-      local tool = Planner.MissingTool(st.recipe)
-      if tool and not inRange[tool.item] then
-        local fam = tool.family or "rod"
-        if not want[fam] or tool.mask > want[fam].mask then want[fam] = tool end
+      for _, tool in ipairs(Planner.MissingTools(st.recipe)) do
+        if not inRange[tool.item] then
+          local fam = tool.family or "rod"
+          if not want[fam] or tool.mask > want[fam].mask then want[fam] = tool end
+        end
       end
     end
   end
@@ -627,8 +779,11 @@ function Planner.Attempt(data, skill, owned, isKnown)
   local best
   for id, r in pairs(data.recipes) do
     local chance = not r.intermediate and not r.conversion and Planner.Chance(r.t, skill) or 0
-    local tool = r.tool and ES.Data.Tools and ES.Data.Tools[r.tool]
-    if chance > 0 and (r.t[1] or 1) <= skill and (not tool or (owned[tool.item] or 0) > 0) and isKnown(id) then
+    local toolsOk = true
+    for _, tool in ipairs(Planner.RecipeTools(r)) do
+      if (owned[tool.item] or 0) <= 0 then toolsOk = false end
+    end
+    if chance > 0 and (r.t[1] or 1) <= skill and toolsOk and isKnown(id) then
       -- Fabricaciones que caben: lo que vende un vendedor no limita
       local fit
       for _, rq in ipairs(r.r) do
@@ -1471,10 +1626,11 @@ local function GPSRecipes(data, opts, ctx)
         -- Empezarla paga el instructor y, si pide una herramienta que no tienes
         -- (Arclight Spanner para Crude Scope), la herramienta. Sin precio: no vale
         local fee = Planner.LearnCost(ctx, r)
-        local tool = r.tool and ES.Data.Tools and ES.Data.Tools[r.tool]
-        if tool and (ctx.toolMask[tool.family or "rod"] or 0) < tool.mask then
-          local cost = Acquire(ctx, tool.item, 1, 0, {}, {}, {})
-          fee = cost and fee + cost or nil
+        for _, tool in ipairs(Planner.RecipeTools(r)) do
+          if fee and (ctx.toolMask[tool.family or "rod"] or 0) < tool.mask then
+            local cost = Acquire(ctx, tool.item, 1, 0, {}, {}, {})
+            fee = cost and fee + cost or nil
+          end
         end
         if fee then
           list[#list + 1] = { id = id, r = r, learn = learn, fee = fee, sale = Planner.SaleInfo(ctx, r),
@@ -2409,19 +2565,23 @@ function Planner:Plan(data, opts)
           local crafts = 1 / chance
           local whyR = {}
           local cost, reagents, extra, actions = RecipeCost(ctx, r, crafts, whyR)
-          -- Herramienta que pide (se consigue una sola vez, la primera vez que hace falta)
-          local toolCost, tool
-          if cost and r.tool then
-            tool = ES.Data.Tools[r.tool]
-            if tool and (ctx.toolMask[tool.family or "rod"] or 0) < tool.mask then
+          -- Herramientas que pide y aún no tienes (se consiguen una sola vez, la primera
+          -- vez que hace falta): { { tool, cost } }
+          local toolCost, tools
+          for _, tool in ipairs(cost and Planner.RecipeTools(r) or {}) do
+            if cost and (ctx.toolMask[tool.family or "rod"] or 0) < tool.mask then
               -- (una herramienta se fabrica una vez y no se compra: vale aunque dé puntos)
               local skill = ctx.skill
               ctx.skill = nil
-              toolCost = Acquire(ctx, tool.item, 1, 0, extra, actions, whyR)
+              local c = Acquire(ctx, tool.item, 1, 0, extra, actions, whyR)
               ctx.skill = skill
-              if not toolCost then cost = nil end
-            else
-              tool = nil
+              if c then
+                tools = tools or {}
+                tools[#tools + 1] = { tool = tool, cost = c }
+                toolCost = (toolCost or 0) + c
+              else
+                cost = nil
+              end
             end
           end
           for itemID, reason in pairs(whyR) do why[itemID] = why[itemID] or reason end
@@ -2463,7 +2623,7 @@ function Planner:Plan(data, opts)
               best = {
                 id = id, score = score, crafts = crafts, chance = chance, cost = cost, value = value,
                 reagents = reagents, extra = extra, actions = actions,
-                tool = tool, toolCost = toolCost or 0, feeSpan = feeSpan, bonus = bonus,
+                tools = tools, toolCost = toolCost or 0, feeSpan = feeSpan, bonus = bonus,
               }
             end
           end
@@ -2477,12 +2637,12 @@ function Planner:Plan(data, opts)
       break
     end
 
-    -- Herramienta conseguida: ya cubre esta categoría y las inferiores
-    if best.tool then
-      local fam = best.tool.family or "rod"
-      ctx.toolMask[fam] = math.max(ctx.toolMask[fam] or 0, best.tool.mask)
-      plan.tools[#plan.tools + 1] = { item = best.tool.item, cost = best.toolCost, skill = s }
-      plan.toolsCost = plan.toolsCost + best.toolCost
+    -- Herramientas conseguidas: cada una cubre su categoría y las inferiores
+    for _, t in ipairs(best.tools or {}) do
+      local fam = t.tool.family or "rod"
+      ctx.toolMask[fam] = math.max(ctx.toolMask[fam] or 0, t.tool.mask)
+      plan.tools[#plan.tools + 1] = { item = t.tool.item, cost = t.cost, skill = s }
+      plan.toolsCost = plan.toolsCost + t.cost
     end
 
     -- Recetas con más probabilidad que la elegida que no se pueden usar por falta de precio
@@ -2571,9 +2731,13 @@ function Planner:Plan(data, opts)
 
   -- [nivel] = { [itemID] = unidades } que pide ese punto (ver arriba)
   plan.pointNeed, plan.pointChance, plan.pointUse = {}, {}, {}
+  -- [nivel] = lo que cuesta de media ese punto (materiales menos lo que se recupera
+  -- vendiendo lo fabricado): lo que te ahorras si lo subes de otra forma (ver Leftover)
+  plan.pointNet = {}
   plan.freePoints = 0 -- puntos que dan los materiales fabricados por el camino (ver CraftBonus)
   for _, p in ipairs(perPoint) do
     plan.pointNeed[p.skill], plan.pointChance[p.skill] = p.need, p.chance
+    plan.pointNet[p.skill] = (p.cost or 0) - (p.value or 0)
     plan.pointUse[p.skill] = p.use -- (tools/route_audit.py)
     if p.free then plan.freePoints = plan.freePoints + 1 end
   end
@@ -2723,6 +2887,22 @@ function Planner:Plan(data, opts)
     plan.crafted[#plan.crafted + 1] = { itemID = itemID, quantity = math.ceil(c.qty - 0.001), recipe = data.recipes[c.recipe], from = c.from,
       owned = ownedQty[itemID] and math.ceil(ownedQty[itemID] - 0.001) or nil }
   end
+  -- Recetas de lo que se fabrica por el camino que aún no sabes (Stonescale Oil para
+  -- Elixir of Greater Defense: 1g 50s en el instructor). Su precio cuenta en la ruta (y
+  -- así el GPS ve si sale mejor comprarlo hecho) y la vista Ruta pone una fila para
+  -- aprenderla. Antes ni se contaba ni se decía: "Fabrica 14× Stonescale Oil" sin saberla
+  plan.prepLearn = {}
+  for _, c in ipairs(plan.crafted) do
+    local r = c.recipe
+    if r and r.id and not r.conversion and not feePaid[r.id] and not plan.prepLearn[r.id] then
+      local cost, source = Planner.LearnCost(ctx, r)
+      if source and source ~= "known" and source ~= "rep" then
+        plan.prepLearn[r.id] = { cost = cost or 0, source = source }
+        plan.fees = plan.fees + (cost or 0)
+      end
+    end
+  end
+
   -- Un paso que empieza gastando lo fabricado antes (la pólvora del paso anterior) y a
   -- mitad necesita fabricar más: el jugador lo tiene que tener ANTES de empezar el
   -- paso (Discord: "112 de dinamita y no tengo pólvora", que la ruta dejaba para el

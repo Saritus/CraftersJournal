@@ -28,7 +28,7 @@ local function BagContents()
   local getInfo = C_Container and C_Container.GetContainerItemInfo
   local getID = (C_Container and C_Container.GetContainerItemID) or GetContainerItemID
   if not numSlots or not getID then return items end
-  for bag = 0, 4 do
+  for _, bag in ipairs(ES.CarriedBags()) do
     for slot = 1, numSlots(bag) or 0 do
       local id = getID(bag, slot)
       if id then
