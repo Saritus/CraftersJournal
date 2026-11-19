@@ -2144,6 +2144,9 @@ local function CraftableFromBags(recipeID)
     if data and data.recipes and data.recipes[recipeID] then r = data.recipes[recipeID] break end
   end
   if not (r and r.r) then return nil end
+  -- Sin la herramienta que pide (Arclight Spanner) no se fabrica ni una
+  local tool = ES.Planner.MissingTool(r)
+  if tool then return 0, { itemID = tool.item, have = 0, need = 1 } end
   local n, short
   for _, rq in ipairs(r.r) do
     local have = ES:ItemCount(rq[1]) or 0

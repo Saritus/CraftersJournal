@@ -3666,6 +3666,35 @@ step("ruta con error: no se queda calculando para siempre", function()
   ES:SelectPage("home")
   if not ok then error(err, 0) end
 end)
+step("herramienta que piden los pasos y no llevas: en la lista", function()
+  -- CurseForge: "me mandó fabricar unas gafas que piden Arclight Spanner y no estaba en
+  -- la lista". La ruta la consiguió en 60 (Crude Scope) y a 222 daba por hecho que la llevas
+  local P, E = ES.Planner, ES.Data.Engineering
+  local savedCount = ES.ItemCount
+  local bags = {}
+  local ok, err = pcall(function()
+    ES.ItemCount = function(_, id) return bags[id] or 0 end
+    local plan = { from = 1, to = 300, reached = 300, tools = { { item = 6219, skill = 60, cost = 170 } },
+      steps = { { from = 60, to = 75, id = 3977, recipe = E.recipes[3977] }, { from = 222, to = 245, id = 12607, recipe = E.recipes[12607] } } }
+    local out = {}
+    assert(P.AddMissingTools("Engineering", plan, 222, 245, out) and out[6219] and out[6219].need == 1,
+      "a 222, sin la llave, la lista debería pedirla")
+    out = {}
+    assert(not P.AddMissingTools("Engineering", plan, 60, 75, out) and not out[6219],
+      "en el nivel donde la ruta la consigue ya va en pointNeed: no dos veces")
+    bags[6219] = 1
+    out = {}
+    assert(not P.AddMissingTools("Engineering", plan, 222, 245, out), "llevándola no se pide")
+    -- Sin ella no se puede fabricar el paso (y no cuenta como "comprado, a fabricar")
+    for _, rq in ipairs(E.recipes[12607].r) do bags[rq[1]] = rq[2] * 3 end
+    assert(ES.CraftableFromBags(12607) == 3, "con la llave y materiales para 3: " .. tostring(ES.CraftableFromBags(12607)))
+    bags[6219] = nil
+    local n, short = ES.CraftableFromBags(12607)
+    assert(n == 0 and short and short.itemID == 6219, "sin la llave no se puede fabricar: " .. tostring(n))
+  end)
+  ES.ItemCount = savedCount
+  if not ok then error(err, 0) end
+end)
 step("precio que sube de golpe: TSM y probar la AH si el depósito compensa (Star Ruby)", function()
   -- Discord: Star Ruby a 85s en la AH (toda la semana a ~50-60s) se mandaba al vendedor
   -- a 50s: el precio inflado se contaba a ~58s y tras la comisión no compensaba

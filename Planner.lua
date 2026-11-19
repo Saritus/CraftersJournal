@@ -374,6 +374,72 @@ function Planner.SetStocked(profKey, plan, level, to)
   s.stocked = { started = lock.started, from = level, to = to }
 end
 
+---------------------------------------------------------------------------
+-- Herramientas (Arclight Spanner, Blacksmith Hammer, bastones rúnicos...). La ruta
+-- apunta la herramienta solo en el nivel donde la consigue (pointNeed), y desde ahí
+-- da por hecho que la llevas. Si no está en las bolsas (no la compraste, la dejaste
+-- en el banco, la vendiste), los pasos siguientes no se pueden fabricar y la lista de
+-- la compra no la pedía (CurseForge: "me mandó fabricar unas gafas que piden Arclight
+-- Spanner y no estaba en la lista")
+---------------------------------------------------------------------------
+-- La herramienta que pide `recipe` y no llevas en las bolsas (nil si no pide o la
+-- llevas: vale cualquiera de su familia igual o mejor)
+function Planner.MissingTool(recipe)
+  local tools = ES.Data and ES.Data.Tools
+  local tool = recipe and recipe.tool and tools and tools[recipe.tool]
+  if not tool then return nil end
+  local fam = tool.family or "rod"
+  for _, t in pairs(tools) do
+    if (t.family or "rod") == fam and t.mask >= tool.mask and (ES:ItemCount(t.item) or 0) > 0 then return nil end
+  end
+  return tool
+end
+
+-- La receta de `profKey` que fabrica `itemID` (para una herramienta sin vendedor)
+local function ToolRecipe(profKey, itemID)
+  local data = ES.Data[profKey]
+  for _, r in pairs(data and data.recipes or {}) do
+    if r.out and r.out[1] == itemID and r.r then return r end
+  end
+end
+
+-- Añade a `out` (el de RouteNeed) las herramientas que piden los pasos entre `from`
+-- y `to` y no llevas: la herramienta si se vende en un vendedor; si no, los
+-- materiales para fabricarla una vez. Devuelve true si añadió algo
+function Planner.AddMissingTools(profKey, plan, from, to, out)
+  -- (la que la ruta consigue dentro del tramo ya va en pointNeed: ella o sus materiales)
+  local inRange = {}
+  for _, tl in ipairs(plan and plan.tools or {}) do
+    if tl.skill >= from and tl.skill < to then inRange[tl.item] = true end
+  end
+  local want = {} -- [familia] = herramienta (la mejor que piden)
+  for _, st in ipairs(plan and plan.steps or {}) do
+    if st.to > from and st.from < to then
+      local tool = Planner.MissingTool(st.recipe)
+      if tool and not inRange[tool.item] then
+        local fam = tool.family or "rod"
+        if not want[fam] or tool.mask > want[fam].mask then want[fam] = tool end
+      end
+    end
+  end
+  local added = false
+  for _, tool in pairs(want) do
+    local vendor = ES.Data.VendorPrices and ES.Data.VendorPrices[tool.item]
+    local r = not vendor and ToolRecipe(profKey, tool.item)
+    if r then
+      for _, rq in ipairs(r.r) do
+        local e = out[rq[1]]
+        local n = rq[2] + (e and e.need or 0)
+        out[rq[1]] = { need = n, expected = (e and e.expected or 0) + rq[2] }
+      end
+    else
+      out[tool.item] = { need = 1, expected = 1 }
+    end
+    added = true
+  end
+  return added
+end
+
 -- ¿Puedes fabricar el paso en el que estás al menos una vez? (nil: no se sabe)
 local function CanCraftStep(plan, level)
   local st = CurrentStep(plan, level)
@@ -429,6 +495,8 @@ function Planner.RouteNeed(profKey, plan, level, opts)
       if Have(itemID) < target then all = false end
       if target > 0 then out[itemID] = { need = target, expected = n.expected } end
     end
+    -- La herramienta que piden los pasos del tramo y no llevas (ver AddMissingTools)
+    if Planner.AddMissingTools(profKey, plan, level, phase.batchTo or phase.to, out) then all = false end
     -- Lo tienes todo: se apunta hasta dónde llega (y desde ahí, a fabricar)
     if all and not hold and next(need) then
       Planner.SetStocked(profKey, plan, level, phase.batchTo or phase.to)
@@ -453,6 +521,7 @@ function Planner.RouteNeed(profKey, plan, level, opts)
       out[itemID] = { need = n, expected = q }
     end
   end
+  if Planner.AddMissingTools(profKey, plan, level, plan.reached or plan.to or level + 1, out) then any, all = true, false end
   if route and any and all and not hold then
     Planner.SetStocked(profKey, plan, level, plan.reached or plan.to or level + 1)
   end
