@@ -553,6 +553,45 @@ local function StopReason(plan)
   elseif missing > 0 then
     return string.format(L["%d materiales sin precio (no están en la AH)"], missing)
   end
+  -- No quedan recetas de instructor: ¿hay otras que darían puntos y no se pueden usar?
+  -- Se dice cuáles y por qué (Primeros auxilios a 270: lo que sigue son pergaminos de
+  -- botín; antes solo decía "no hay más recetas de instructor" y parecía un fallo)
+  local data, s = plan.ctx and plan.ctx.data, plan.stoppedAt
+  if data and s then
+    local why = { scroll = {}, rep = {}, spec = {}, favor = {} }
+    local opts = plan.ctx.opts or {}
+    -- (un pergamino cuenta solo si de verdad no hay de dónde sacarlo: ni vendedor, ni
+    -- misión, ni la AH)
+    local function NoSource(r)
+      local src = ES.Waypoints.RecipeSource(r, plan.ctx.prices, opts.noQuests, opts.noLimited)
+      return not (src and src.best)
+    end
+    for id, r in pairs(data.recipes) do
+      local level = r.train or (r.t and r.t[1]) or 1
+      if r.t and r.t[4] > s and level <= s and not r.gone and not ES:IsRecipeKnown(id) then
+        local kind = (r.rep and not ES:RepMet(r.rep) and "rep")
+          or (r.spec and not ES:HasSpecialization(r.spec) and "spec")
+          or (r.favor and not opts.useFavor and "favor")
+          or (r.scroll and not r.fee and not r.favor and NoSource(r) and "scroll")
+        if kind then table.insert(why[kind], r.name) end
+      end
+    end
+    local function Names(list)
+      table.sort(list)
+      local shown = {}
+      for i = 1, math.min(3, #list) do shown[i] = list[i] end
+      return table.concat(shown, ", ") .. (#list > 3 and ", …" or "")
+    end
+    if #why.scroll > 0 then
+      return string.format(L["lo que sigue se aprende de pergaminos que no vende ningún vendedor ni están en la AH: %s"], Names(why.scroll))
+    elseif #why.rep > 0 then
+      return string.format(L["lo que sigue pide más reputación: %s"], Names(why.rep))
+    elseif #why.spec > 0 then
+      return string.format(L["lo que sigue es de una especialización que no tienes: %s"], Names(why.spec))
+    elseif #why.favor > 0 then
+      return string.format(L["lo que sigue se compra con Merchant's Favor (actívalo con su icono): %s"], Names(why.favor))
+    end
+  end
   return L["no hay más recetas de instructor para ese nivel"]
 end
 

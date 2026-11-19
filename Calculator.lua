@@ -29,8 +29,16 @@ local REP_DISCOUNT = { [5] = 0.05, [6] = 0.10, [7] = 0.15, [8] = 0.20 } -- amist
 -- Cálculos guardados
 ---------------------------------------------------------------------------
 local function Store()
-  ES.db.calcs = ES.db.calcs or { list = {}, nextID = 1 }
-  return ES.db.calcs
+  if type(ES.db.calcs) ~= "table" then ES.db.calcs = {} end
+  local s = ES.db.calcs
+  -- (lo guardado sin su lista o sin el número siguiente: la Calculadora daba error al abrirla)
+  if type(s.list) ~= "table" then s.list = {} end
+  if type(s.nextID) ~= "number" then
+    local top = 0
+    for _, c in ipairs(s.list) do if type(c) == "table" and type(c.id) == "number" and c.id > top then top = c.id end end
+    s.nextID = top + 1
+  end
+  return s
 end
 
 function Calc:List() return Store().list end

@@ -4,7 +4,10 @@ import sys
 from pathlib import Path
 
 import os
-sys.path.insert(0, os.environ.get("ESLUA", r"C:\Users\bruno\AppData\Local\Temp\eslua"))  # carpeta con lupa (Lua 5.1)
+# Carpeta con lupa (Lua 5.1), solo si existe: si no, el lupa instalado con pip
+_ESLUA = os.environ.get("ESLUA", r"C:\Users\bruno\AppData\Local\Temp\eslua")
+if os.path.isdir(_ESLUA):
+    sys.path.insert(0, _ESLUA)
 from lupa import lua51
 
 ADDON = Path(__file__).resolve().parent.parent  # el repositorio (no depende del enlace en AddOns)
@@ -7450,5 +7453,9 @@ for f in sorted(ADDON.rglob("*.lua")):
                 break
 print(("FAIL caracteres sin glifo en la fuente de WoW:\n  " + "\n  ".join(bad[:20])) if bad
       else "OK   textos sin caracteres que la fuente de WoW no dibuja")
+
+# Código de salida: 1 si algún paso ha fallado (para tools/run_tests.py)
+if bad or any(l.startswith("FAIL") for l in str(out).splitlines()):
+    sys.exit(1)
 
 

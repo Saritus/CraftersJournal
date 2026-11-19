@@ -568,7 +568,16 @@ local function LoadCharacterData()
   db.tabs = nil -- (orden y pestañas ocultas: se quitó de Opciones)
   db.autoCraft = nil -- (pulsar un paso siempre fabrica: ya no es una opción)
   for _, settings in pairs(c.prof) do -- (ruta sin AH: ya no existe; la ruta siempre puede usarla)
-    if type(settings) == "table" then settings.useAH = nil end
+    if type(settings) == "table" then
+      settings.useAH = nil
+      -- Ruta empezada sin sus niveles (lo guardado roto): no se puede rehacer y daba
+      -- error al pintar la portada. Fuera: la ruta se vuelve a calcular y se puede
+      -- empezar otra vez
+      local lock = settings.lock
+      if lock ~= nil and not (type(lock) == "table" and type(lock.from) == "number" and type(lock.to) == "number") then
+        settings.lock = nil
+      end
+    end
   end
   -- Las listas de la compra de una ruta ya no se añaden a mano: con la ruta empezada
   -- salen solas (Shopping.PhaseList). Las guardadas de antes se quitan, una vez
@@ -701,6 +710,13 @@ events:SetScript("OnEvent", function(_, event, arg1)
     CraftersJournalDB = CraftersJournalDB or {}
     ApplyDefaults(CraftersJournalDB, DEFAULTS)
     ES.db = CraftersJournalDB
+    -- Escaneos sin hora o sin objetos (lo guardado roto): no sirven y rompían la
+    -- ventana al abrirla ("Último escaneo: hace..." con la hora en nil). Fuera
+    for key, scan in pairs(ES.db.scans) do
+      if type(scan) ~= "table" or type(scan.time) ~= "number" or type(scan.items) ~= "table" then
+        ES.db.scans[key] = nil
+      end
+    end
     LoadCharacterData()
     ES.lang = ES.db.lang or ES.DefaultLanguage()
     ES.db.lastGetAll, ES.db.serverLimit = nil, nil -- claves de versiones anteriores (ver Scanner.lua)
