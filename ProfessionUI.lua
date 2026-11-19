@@ -465,6 +465,9 @@ function ES:RequestPlan(profKey, from, to, cap, onDone, owner)
   local key = self:PlanKey(profKey, from, to, cap)
   local cached = self.homePlanCache[profKey]
   if cached and cached.key == key then return cached.plan end
+  -- Esta misma ruta ya dio error: no se repite (la portada la volvería a pedir con
+  -- cada repintado). Cambiar algo (nivel, objetivo, escaneo, opciones) es otra clave
+  if self.planFailed[profKey] == key then return nil, true end
   local inline = true
   self.Jobs.Run("plan:" .. profKey .. ":" .. tostring(owner), key, function()
     -- Progreso (barra de "Calculando"): cuántas veces recorre la ruta el planificador,
@@ -477,17 +480,26 @@ function ES:RequestPlan(profKey, from, to, cap, onDone, owner)
     self.db.planPasses[profKey] = { passes = P.passes, span = to - from }
     self.planRunning = nil
     return plan
-  end, function(plan)
+  end, function(plan, err)
+    if err then
+      if not inline and onDone then onDone(nil, true) end
+      return
+    end
     if self:PlanKey(profKey, from, to, cap) == key then
       self.homePlanCache[profKey] = { key = key, plan = plan }
       Remember(profKey, plan)
     end
     if not inline and onDone then onDone(plan) end
-  end, owner)
+  end, owner, nil, function()
+    self.planRunning = nil
+    self.planFailed[profKey] = key
+  end)
   inline = false
   cached = self.homePlanCache[profKey]
   if cached and cached.key == key then return cached.plan end
+  if self.planFailed[profKey] == key then return nil, true end
 end
+ES.planFailed = {} -- [profKey] = clave de la ruta que dio error (ver RequestPlan)
 
 -- Barra y porcentaje de "Calculando la ruta…" de una página (se llama al pintarla y
 -- cada 0,1 s mientras la barra se ve)
@@ -503,7 +515,7 @@ end
 
 -- Progreso del cálculo de la ruta de una profesión, de 0 a 1, o nil si no se está
 -- calculando ahora (en cola: 0). Se estima con las pasadas de la última vez (ajustadas
--- si el tramo es más largo o más corto); sin ella, unas 5 por nivel. Nunca llega a 1
+-- si el tramo es más largo o más corto); sin ella, unas 7 por nivel. Nunca llega a 1
 -- hasta acabar: si tarda más de lo previsto, se acerca despacio
 function ES:PlanProgress(profKey)
   local run = self.planRunning
@@ -511,7 +523,11 @@ function ES:PlanProgress(profKey)
     return self.Jobs.Queued and self.Jobs.Queued("plan:" .. profKey .. ":") and 0 or nil
   end
   local last = self.db.planPasses and self.db.planPasses[profKey]
-  local expected = last and last.passes * math.max(0.3, run.span / math.max(1, last.span)) or run.span * 5
+  local expected = last and last.passes * math.max(0.3, run.span / math.max(1, last.span)) or run.span * 7
+  -- (la búsqueda tiene tope: Planner.GPS_MAX_WALKS, más los arreglos del final, que
+  -- no lo tienen: con un usuario nuevo, 1-300 da hasta ~2300 pasadas en Sastrería. Sin
+  -- esto, una previsión de antes del tope, de 3700, dejaba la barra a medias)
+  expected = math.min(expected, (self.Planner.GPS_MAX_WALKS or math.huge) + 500)
   local x = (self.Planner.passes or 0) / math.max(1, expected)
   if x <= 0.9 then return x end
   return 0.9 + 0.09 * (1 - math.exp(-(x - 0.9) * 3)) -- (pasada la previsión: hasta 99%)
@@ -2057,10 +2073,12 @@ function ES:CalculatePlan(page)
     local cap = page.detected and page.detected.cap or nil
     local key = self:PlanKey(page.profKey, from, to, cap)
     page.planKey = key
-    local plan = self:RequestPlan(page.profKey, from, to, cap, function(result)
+    page.planFailed = nil
+    local plan, failed = self:RequestPlan(page.profKey, from, to, cap, function(result, err)
       if page.planKey ~= key then return end -- se pidió otra ruta después
       page.calculating = nil
       page.plan = result
+      page.planFailed = err or nil
       -- Llegaron precios de vendedor que esperaba mientras calculaba: una vez más,
       -- con ellos (sin haber tirado lo calculado)
       if page.recalcQueued and not self:RouteLock(page.profKey) and page:IsVisible() then
@@ -2071,7 +2089,7 @@ function ES:CalculatePlan(page)
       end
       self:RenderPlan(page)
     end, page)
-    if plan then page.plan = plan else page.calculating = true end
+    if plan then page.plan = plan elseif failed then page.plan, page.planFailed = nil, true else page.calculating = true end
   end
   self:RenderPlan(page)
 end
@@ -4394,7 +4412,9 @@ function ES:RenderPlan(page)
   end
 
   local status
-  if not plan then
+  if not plan and page.planFailed then
+    status = ORANGE .. L["No se pudo calcular la ruta (error del addon). Pulsa Informar para enviárnoslo.|r"]
+  elseif not plan then
     status = GREEN .. L["Ya estás en el objetivo. Sube el objetivo para ver la ruta.|r"]
   elseif #plan.steps == 0 then
     status = ORANGE .. L["No se puede subir desde "] .. plan.from .. ": " .. StopReason(plan) .. ".|r" .. AttemptHint(page, plan)

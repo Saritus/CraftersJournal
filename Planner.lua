@@ -544,7 +544,9 @@ local COOLDOWN = { [18560] = true } -- Mooncloth
 function Planner.Cooldown(r, id)
   if r.cd ~= nil then return r.cd end
   if NO_COOLDOWN[id] then return false end
-  return COOLDOWN[id] or (r.name or ""):find("^Transmute") ~= nil
+  -- (por el nombre en inglés: con el cliente en español r.name es "Transmutar: ..." y
+  -- la ruta volvía a pedir 186 transmutaciones de hierro a oro)
+  return COOLDOWN[id] or (r.nameEN or r.name or ""):find("^Transmute") ~= nil
 end
 
 -- Donde la ruta se para (no hay materiales para un punto entero: Rough Grinding
@@ -1220,6 +1222,11 @@ local GPS_SEGMENT_ROUNDS = 3   -- vueltas repensando cada tramo con el GPS
 local GPS_SUB_ROUNDS = 8       -- cambios de receta de un paso que se aceptan como mucho
 local GPS_SUB_CANDIDATES = 5   -- recetas que se prueban en lugar de cada paso
 local GPS_TOP = 4              -- mejores rutas vistas que se repasan al final
+-- Recorridos de la búsqueda como mucho (Planner.GPS_MAX_WALKS). Una ruta difícil
+-- (Engineering 1-300, con GreenRisk) llegaba a 3700 y en el juego tardaba minutos:
+-- "se queda en el 99%" (CurseForge). Pasado el tope se queda la mejor encontrada; los
+-- arreglos del final (aprender para pocas, saltos) se hacen siempre
+Planner.GPS_MAX_WALKS = 1800
 local GPS_NEAR_PCT = 0.05      -- fabricar ↔ comprar solo en rutas a menos de un 5%
 local GPS_NEAR_MIN = 500       -- (o 5s) de la mejor
 
@@ -1550,6 +1557,8 @@ function Planner.PlanGPS(data, opts)
     medians = tpl.medians, producers = tpl.producers }
   local Score = Planner.RouteScore
   local best, seen, pool = nil, {}, {}
+  -- Recorridos hechos; con `capped`, pasado GPS_MAX_WALKS no se recorre nada nuevo
+  local walks, capped = 0, true
   local function Better(p)
     return not best or p.reached > best.reached or (p.reached == best.reached and Score(p) < Score(best) - EPS)
   end
@@ -1561,6 +1570,8 @@ function Planner.PlanGPS(data, opts)
     local key = ChoiceKey(opts, choice, v)
     -- (ya recorrida: nil, salvo al alargar un paso, que quiere la ruta de verdad)
     if seen[key] then return depth and seen[key] or nil end
+    if capped and walks >= Planner.GPS_MAX_WALKS then return nil end
+    walks = walks + 1
     local t = Copy(opts)
     t.forced, t.via = choice, v
     local p = Planner:Plan(data, t)
@@ -1967,6 +1978,8 @@ function Planner.PlanGPS(data, opts)
     return found
   end
   if IngredientFirst() then Polish() end
+  -- (lo que sigue son arreglos para que la ruta se pueda seguir: pocos recorridos, sin tope)
+  capped = false
 
   -- Aprender una receta para unas pocas fabricaciones, solo si compensa: ir al
   -- instructor por 1-5 fabricaciones que ahorran 2s no merece la pena (CurseForge:
@@ -2010,7 +2023,10 @@ function Planner.PlanGPS(data, opts)
       if a.id == c.id and b.to - b.from <= ZIGZAG_STEPS then
         local choice = Copy(best.choice)
         for s = b.from, b.to - 1 do choice[s] = a.id end
-        local q = Walk(choice, best.ctx.via)
+        -- (depth 0: la ruta sin el salto casi siempre ya se recorrió en la búsqueda, y
+        -- sin él Walk daba nil: el salto se quedaba. Alquimia 14-15: "Elixir de
+        -- defensa menor" x1 entre dos tramos de "Elixir de fuerza menor")
+        local q = Walk(choice, best.ctx.via, 0)
         local allowed = math.max(ZIGZAG_MIN, ZIGZAG_PCT * math.abs(Score(best)))
         if q and q.reached >= best.reached and not q.unfollowable and Score(q) <= Score(best) + allowed then
           best, changed = q, true

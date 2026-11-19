@@ -3631,6 +3631,41 @@ step("rutas repartidas entre fotogramas (sin tirones)", function()
   ES.GetProfessionSkill = savedSkill
   ES:SelectPage("home")
 end)
+step("ruta con error: no se queda calculando para siempre", function()
+  -- CurseForge: "se queda en el 99%". Si el planificador da error, la página deja de
+  -- calcular y lo dice, y la misma ruta no se vuelve a lanzar en bucle
+  local frames, realAfter = {}, C_Timer.After
+  local savedPlan, savedEH, savedDPS = ES.Planner.Plan, geterrorhandler, debugprofilestop
+  local ms, calls, reported = 0, 0, 0
+  local ok, err = pcall(function()
+    C_Timer.After = function(_, fn) frames[#frames + 1] = fn end
+    debugprofilestop = function() ms = ms + 0.05 return ms end
+    geterrorhandler = function() return function() reported = reported + 1 end end
+    ES.Planner.Plan = function() calls = calls + 1 error("boom") end
+    ES:InvalidatePlan("Cooking")
+    ES:SelectPage("Cooking")
+    local page
+    for _, p in ipairs(ES.professionPages) do if p.profKey == "Cooking" then page = p end end
+    page._scripts.OnShow(page)
+    assert(page.calculating, "debería empezar calculando")
+    local n = 0
+    while #frames > 0 and n < 1000 do table.remove(frames, 1)() n = n + 1 end
+    assert(not page.calculating, "con el error, sigue calculando")
+    assert(page.planFailed and ES.planRunning == nil, "debería quedar como fallida y sin cálculo en marcha")
+    assert(tostring(page.status._text):find("No se pudo calcular"), "no avisa del error: " .. tostring(page.status._text))
+    assert(reported == 1 and calls >= 1, "el error debería informarse una vez: " .. reported)
+    -- Repintar no la relanza
+    local before = calls
+    ES:CalculatePlan(page)
+    while #frames > 0 and n < 2000 do table.remove(frames, 1)() n = n + 1 end
+    assert(calls == before, "la misma ruta fallida se ha vuelto a calcular")
+  end)
+  ES.Planner.Plan, geterrorhandler, debugprofilestop, C_Timer.After = savedPlan, savedEH, savedDPS, realAfter
+  ES:InvalidatePlan("Cooking")
+  ES.planFailed = {}
+  ES:SelectPage("home")
+  if not ok then error(err, 0) end
+end)
 step("precio que sube de golpe: TSM y probar la AH si el depósito compensa (Star Ruby)", function()
   -- Discord: Star Ruby a 85s en la AH (toda la semana a ~50-60s) se mandaba al vendedor
   -- a 50s: el precio inflado se contaba a ~58s y tras la comisión no compensaba
@@ -6257,6 +6292,13 @@ step("ganar dinero: quitar recetas y enfriamientos", function()
   local ok, err = pcall(function()
     ES.GetProfessionSkill = function(self, line) if line == ES.Data.Leatherworking.skillLine then return 150, 225 end end
     ES.IsRecipeKnown = function(self, id) local r = ES.Data.Leatherworking.recipes[id] return r ~= nil and r.fee ~= nil end
+    -- Transmutar con el cliente en español (r.name traducido): sigue siendo de
+    -- enfriamiento (la ruta de Alquimia pedía 186 "Transmutar: hierro a oro")
+    local tr = ES.Data.Alchemy.recipes[11479]
+    assert(ES.Planner.Cooldown({ name = "Transmutar: hierro a oro", nameEN = "Transmute: Iron to Gold" }, 11479)
+      and tr and ES.Planner.Cooldown(tr, 11479), "Transmutar traducido debería tener enfriamiento")
+    assert(not ES.Planner.Cooldown({ name = "Transmutar: fuego elemental", nameEN = "Transmute: Elemental Fire" }, 25146),
+      "Transmute: Elemental Fire no tiene enfriamiento")
     ES.Earn:Clear()
     local res = ES.Earn:Ideas()
     -- (las de enfriamiento: como mucho una, nunca un lote en serie)
@@ -6502,7 +6544,8 @@ end)
 step("compras de la AH de camino al buzón", function()
   local LG = ES.Ledger
   local saved = { C_Container, ES.ItemCount, ERR_AUCTION_WON_S, GetInboxNumItems, GetInboxItem, GetItemInfo,
-    ES.charData.ahOnWay, NOW }
+    ES.charData.ahOnWay, NOW, ES.ahOpen }
+  ES.ahOpen = true -- (comprar es en la AH: fuera no se lee el chat)
   local bags, mail = 0, {}
   C_Container = { GetContainerNumSlots = function(b) return b == 0 and 1 or 0 end,
     GetContainerItemID = function() return bags > 0 and 765 or nil end,
@@ -6600,10 +6643,32 @@ step("compras de la AH de camino al buzón", function()
     LG.pendingCommodity = { itemID = 765, n = 10 }
     FireEvent("COMMODITY_PURCHASE_FAILED")
     assert(ES:HaveForShopping(765) == 80, "una compra fallida no cuenta")
+    -- 4. Fuera de la AH no se lee el chat (mazmorras: textos secretos, error de taint).
+    -- Justo tras cerrarla sí (el mensaje puede llegar tarde); pasado el margen, no
+    clock = 400
+    ES.ahOpen = false
+    local savedAHF, savedAF = AuctionHouseFrame, AuctionFrame
+    AuctionHouseFrame, AuctionFrame = nil, nil
+    FireEvent("AUCTION_HOUSE_CLOSED")
+    LG.OnChatLine("You won an auction for [Silverleaf]x5 for 1s 00c", "chat")
+    assert(ES:HaveForShopping(765) == 85, "recién cerrada la AH, la compra cuenta: " .. ES:HaveForShopping(765))
+    clock = 500
+    LG.OnChatLine("You won an auction for [Silverleaf]x7 for 1s 00c", "chat")
+    FireEvent("CHAT_MSG_SYSTEM", "You won an auction for [Silverleaf]x7")
+    AuctionHouseFrame, AuctionFrame = savedAHF, savedAF
+    assert(ES:HaveForShopping(765) == 85, "fuera de la AH el chat no se lee: " .. ES:HaveForShopping(765))
+    -- Un texto secreto (issecretvalue) no se toca aunque esté la AH abierta
+    ES.ahOpen = true
+    local savedSecret = issecretvalue
+    issecretvalue = function() return true end
+    FireEvent("CHAT_MSG_SYSTEM", "You won an auction for [Silverleaf]x9")
+    LG.OnChatLine("You won an auction for [Silverleaf]x9 for 1s 00c", "chat")
+    issecretvalue = savedSecret
+    assert(ES:HaveForShopping(765) == 85, "un texto secreto no se lee: " .. ES:HaveForShopping(765))
     GetTime = savedGT
   end)
   C_Container, ES.ItemCount, ERR_AUCTION_WON_S, GetInboxNumItems, GetInboxItem, GetItemInfo = saved[1], saved[2], saved[3], saved[4], saved[5], saved[6]
-  ES.charData.ahOnWay, NOW = saved[7], saved[8]
+  ES.charData.ahOnWay, NOW, ES.ahOpen, LG.ahClosedAt = saved[7], saved[8], saved[9], nil
   if not ok then error(err, 0) end
 end)
 -- Con el instructor abierto, el paso de entrenar aprende con un clic lo que toca (y lo

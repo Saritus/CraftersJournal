@@ -130,6 +130,17 @@ lua.execute(r"""
 for k in pairs(CraftersJournalDB.scans) do REALM = k:match("^(.*)%-[^-]+$") break end
 NPC_FACTION = "Alliance"
 """)
+# Usuario nuevo (CJ_FRESH): sin nada guardado ("noscan") o solo con el último escaneo
+# de la AH y lo que deja ("scan"): sin historial, sin precios vistos del instructor,
+# sin rutas anteriores ni pasadas de la barra de progreso
+FRESH = os.environ.get("CJ_FRESH")
+if FRESH:
+    lua.globals().FRESH = FRESH
+    lua.execute(r"""
+local old = CraftersJournalDB
+CraftersJournalDB = {}
+if FRESH == "scan" then CraftersJournalDB.scans, CraftersJournalDB.track = old.scans, old.track end
+""")
 
 toc = (ADDON / "CraftersJournal.toc").read_text(encoding="utf-8")
 files = [l.strip() for l in toc.splitlines() if l.strip() and not l.startswith("#")]

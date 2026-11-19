@@ -29,6 +29,11 @@ local function Finish(job, ok, result)
     if j == job then table.remove(queue, i) break end
   end
   if not ok then
+    -- Antes solo se informaba del error: quien esperaba no se enteraba y se quedaba
+    -- "Calculando la ruta… 99%" para siempre (CurseForge). Ahora se le avisa (con
+    -- nil y el error) y job.onError limpia lo que el trabajo dejó a medias
+    if job.onError then pcall(job.onError, result) end
+    for _, fn in pairs(job.listeners) do pcall(fn, nil, result) end
     if geterrorhandler then geterrorhandler()(result) end
     return
   end
@@ -75,11 +80,19 @@ end
 -- resultado). Si ya se está calculando esa versión en cualquier hueco, solo se
 -- apunta `onDone` entre quienes esperan (uno por `owner`: si el mismo lo pide otra
 -- vez, no se repite). Si en el hueco había otro trabajo, se descarta: lo que
--- calculaba ya no le sirve a nadie. onDone(resultado) se llama al acabar.
-function Jobs.Run(key, version, fn, onDone, owner, light)
+-- calculaba ya no le sirve a nadie. onDone(resultado) se llama al acabar; si `fn` da
+-- error, onError(error) y después onDone(nil, error) a cada uno que espera.
+function Jobs.Run(key, version, fn, onDone, owner, light, onError)
   owner = owner or onDone
   if not debugprofilestop then
-    onDone(fn())
+    local ok, result = pcall(fn)
+    if not ok then
+      if onError then pcall(onError, result) end
+      pcall(onDone, nil, result)
+      if geterrorhandler then geterrorhandler()(result) end
+      return
+    end
+    onDone(result)
     return
   end
   for _, job in ipairs(queue) do
@@ -95,7 +108,7 @@ function Jobs.Run(key, version, fn, onDone, owner, light)
       break
     end
   end
-  queue[#queue + 1] = { key = key, version = version, fn = fn, listeners = { [owner] = onDone }, light = light }
+  queue[#queue + 1] = { key = key, version = version, fn = fn, listeners = { [owner] = onDone }, light = light, onError = onError }
   Schedule()
 end
 

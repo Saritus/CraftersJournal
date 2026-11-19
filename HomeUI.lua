@@ -453,8 +453,8 @@ local function ProfessionEntries()
   for _, e in ipairs(list) do
     if e.from < e.target then
       if e.learned then
-        e.plan = ES:RequestPlan(e.key, e.from, e.target, e.cap, function() ES:RenderHome() end, "home")
-        e.pending = not e.plan
+        e.plan, e.failed = ES:RequestPlan(e.key, e.from, e.target, e.cap, function() ES:RenderHome() end, "home")
+        e.pending = not e.plan and not e.failed
       else
         e.plan = ES:CachedPlan(e.key, e.from, e.target, e.cap)
       end
@@ -525,6 +525,8 @@ function ES:RenderHome()
         lock.from, lock.to) .. "|r"
     elseif e.pending then
       note = GREY .. L["Calculando la ruta…"] .. "|r"
+    elseif e.failed then
+      note = ORANGE .. L["No se pudo calcular la ruta|r"]
     elseif plan and #plan.steps == 0 then
       -- Ni un paso: faltan precios de materiales. Un coste de 0 engañaría
       note = ORANGE .. L["Faltan precios: escanea la AH|r"]

@@ -469,6 +469,24 @@ Ledger.MerchantInfo = MerchantInfo
 -- (Core.lua: ES.db.sellSeen)
 ---------------------------------------------------------------------------
 
+-- ¿Se puede leer este texto? Un texto normal sí; uno "secreto" (mazmorras, combate:
+-- issecretvalue) no se puede ni indexar ni comparar sin un error de taint
+function Ledger.Readable(s)
+  if type(s) ~= "string" then return false end
+  if issecretvalue and issecretvalue(s) then return false end
+  return true
+end
+
+-- ¿Hay que mirar el chat y los errores? Solo con la AH abierta, y unos segundos tras
+-- cerrarla (el mensaje de la compra puede llegar justo después). Fuera de la AH
+-- (mazmorras, combate...) el addon no lee nada del chat
+local CHAT_GRACE = 30
+local function Clock() return GetTime and GetTime() or time() end
+function Ledger.Listening()
+  if ES.IsAuctionHouseOpen and ES:IsAuctionHouseOpen() then return true end
+  return Ledger.ahClosedAt ~= nil and Clock() - Ledger.ahClosedAt < CHAT_GRACE
+end
+
 do
   local f = CreateFrame("Frame")
   for _, e in ipairs({ "TRAINER_SHOW", "TRAINER_UPDATE", "TRAINER_CLOSED", "PLAYER_ENTERING_WORLD",
@@ -479,6 +497,16 @@ do
   end
   f:SetScript("OnEvent", function(_, event, ...)
     if not ES.db then return end
+    if event == "AUCTION_HOUSE_CLOSED" then Ledger.ahClosedAt = Clock() end
+    if event == "AUCTION_HOUSE_SHOW" then Ledger.ahClosedAt = nil end
+    -- El chat y los errores solo importan en la AH (ver Ledger.Listening). Además, en
+    -- mazmorras/combate el juego da los textos como "secretos": ni compararlos ni
+    -- leerlos (error de taint)
+    if event == "CHAT_MSG_SYSTEM" or event == "UI_ERROR_MESSAGE" then
+      if not Ledger.Listening() then return end
+      local message = event == "CHAT_MSG_SYSTEM" and (...) or select(2, ...)
+      if not Ledger.Readable(message) then return end
+    end
     -- Respuesta de la AH al anuncio pendiente (ver PostOnAH): creada, o un error en rojo
     if Ledger.pendingPost then
       if event == "AUCTION_HOUSE_AUCTION_CREATED" then
@@ -745,7 +773,7 @@ end
 -- 35s 00c"). La misma línea en varias ventanas de chat cuenta una vez
 local lastLine, lastLineAt
 function Ledger.OnChatLine(text, via)
-  if type(text) ~= "string" then return end
+  if not Ledger.Listening() or not Ledger.Readable(text) then return end
   local itemID, n = Ledger.ParseAuctionWon(text)
   if not itemID then return end
   local now = Now()
@@ -1014,7 +1042,7 @@ end
 -- del cliente) y el de no tener dinero (el depósito). Se leen una vez de _G
 local auctionErrors
 function Ledger.IsAuctionError(message)
-  if type(message) ~= "string" then return false end
+  if not Ledger.Readable(message) then return false end
   if not auctionErrors then
     auctionErrors = {}
     for k, v in pairs(_G) do
